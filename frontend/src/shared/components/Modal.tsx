@@ -4,6 +4,7 @@ import { X } from 'lucide-react'
 import { Button } from './Button'
 
 export const MODAL_EXIT_DURATION_MS = 420
+const MODAL_BACKDROP_EXIT_DURATION_MS = 680
 
 interface ModalProps {
   open: boolean
@@ -38,7 +39,7 @@ export function Modal({
     const timer = window.setTimeout(() => {
       setMounted(false)
       setClosing(false)
-    }, MODAL_EXIT_DURATION_MS)
+    }, MODAL_BACKDROP_EXIT_DURATION_MS)
 
     return () => window.clearTimeout(timer)
   }, [open])

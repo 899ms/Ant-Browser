@@ -20,14 +20,6 @@ interface Toast extends NotificationPayload {
 type ToastOptions = Omit<NotificationInput, 'type' | 'message'>
 
 const TOAST_DEDUPE_WINDOW_MS = 10_000
-const TOAST_SUCCESS_BACKDROP_DURATION = 1_200
-const TOAST_BACKDROP_EXIT_DURATION = 460
-const TOAST_BACKDROP_EXIT_DURATIONS: Record<NotificationType, number> = {
-  success: TOAST_BACKDROP_EXIT_DURATION,
-  info: 360,
-  warning: 360,
-  error: 360,
-}
 const TOAST_FOCUS_PRIORITY: Record<NotificationType, number> = {
   success: 1,
   info: 2,
@@ -38,7 +30,13 @@ const TOAST_EXIT_DURATIONS: Record<NotificationType, number> = {
   success: 560,
   info: 360,
   warning: 360,
-  error: 360,
+  error: 320,
+}
+const TOAST_BACKDROP_EXIT_DURATIONS: Record<NotificationType, number> = {
+  success: TOAST_EXIT_DURATIONS.success,
+  info: TOAST_EXIT_DURATIONS.info,
+  warning: TOAST_EXIT_DURATIONS.warning,
+  error: TOAST_EXIT_DURATIONS.error,
 }
 const toastDedupeTimestamps = new Map<string, number>()
 
@@ -104,7 +102,9 @@ function shouldShowToast(dedupeKey?: string) {
 }
 
 function selectToastFocus(toasts: Toast[]) {
-  return [...toasts].sort((left, right) => TOAST_FOCUS_PRIORITY[right.type] - TOAST_FOCUS_PRIORITY[left.type])[0] ?? null
+  return [...toasts]
+    .filter((toast) => toast.type !== 'success')
+    .sort((left, right) => TOAST_FOCUS_PRIORITY[right.type] - TOAST_FOCUS_PRIORITY[left.type])[0] ?? null
 }
 
 function getToastDuration(toast: Pick<Toast, 'type' | 'duration'>) {
@@ -114,7 +114,6 @@ function getToastDuration(toast: Pick<Toast, 'type' | 'duration'>) {
 }
 
 function getToastBackdropDuration(toast: Toast) {
-  if (toast.type === 'success') return TOAST_SUCCESS_BACKDROP_DURATION
   return getToastDuration(toast)
 }
 

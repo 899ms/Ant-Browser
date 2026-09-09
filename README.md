@@ -338,7 +338,7 @@ chrome/
 4. 从历史列表选择本地或远程备份，可下载并恢复；恢复采用合并方式，不会直接清空现有数据。
 5. 需要自动备份时，先配置 OpenList，再设置每日执行时间。
 
-OpenList Token 和 S3 访问凭据保存在本机的 `backup.local.yaml`，不会写入 `config.yaml`；不要把该文件复制到公共仓库或提交到 git。
+OpenList Token 和 S3 访问凭据保存在应用用户配置目录中的 `backup.local.yaml`，不会写入 `config.yaml`；不要把该文件复制到公共仓库或提交到 git。
 
 ## 常用操作
 
@@ -376,7 +376,7 @@ OpenList Token 和 S3 访问凭据保存在本机的 `backup.local.yaml`，不�
 
 ### 5. 备份凭据会不会写进配置文件？
 
-不会写入普通 `config.yaml`。OpenList Token 和 S3 访问凭据保存在被忽略的本地文件 `backup.local.yaml`，界面读取时默认显示为脱敏值。
+不会写入普通 `config.yaml`。OpenList Token 和 S3 访问凭据保存在应用用户配置目录中的本地文件 `backup.local.yaml`，界面读取时默认显示为脱敏值。
 
 ## Roadmap
 

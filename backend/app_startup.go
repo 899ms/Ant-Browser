@@ -32,6 +32,7 @@ func (a *App) startup(ctx context.Context) {
 
 	log := a.startupInitLogger(ctx, cfg)
 	a.startupLogEnvironment(log, cfg)
+	a.activateStableBackupLocalConfig()
 	if err := a.prepareBackupLocalConfig(); err != nil {
 		log.Error("本地备份配置初始化失败", logger.F("error", err))
 	}
