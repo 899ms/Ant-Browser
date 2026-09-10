@@ -31,6 +31,9 @@ func (a *App) startup(ctx context.Context) {
 	a.applyRuntimeConfig(cfg.Runtime)
 
 	log := a.startupInitLogger(ctx, cfg)
+	if err := killResidualRuntimeProcesses(a.appRoot); err != nil {
+		log.Warn("清理上次异常退出遗留的代理进程失败", logger.F("error", err))
+	}
 	a.startupLogEnvironment(log, cfg)
 	a.activateStableBackupLocalConfig()
 	if err := a.prepareBackupLocalConfig(); err != nil {

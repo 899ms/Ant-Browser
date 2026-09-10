@@ -285,7 +285,8 @@ export function ToastContainer() {
         <div
           key={`${focus.id}-${focus.type}`}
           aria-hidden="true"
-          className={`toast-focus-backdrop toast-focus-${focus.type} pointer-events-none fixed inset-0 z-[9995] ${focus.phase === 'leave' ? 'toast-focus-leaving' : ''}`}
+          onClick={() => dismissFocus(focus.id)}
+          className={`toast-focus-backdrop toast-focus-${focus.type} fixed inset-0 z-[9995] ${focus.phase === 'leave' ? 'pointer-events-none' : 'pointer-events-auto cursor-pointer'} ${focus.phase === 'leave' ? 'toast-focus-leaving' : ''}`}
         />
       ) : null}
       <div className="pointer-events-none fixed right-3 top-3 z-[10000] flex max-h-[calc(100vh-1.5rem)] w-[min(480px,calc(100vw-1.5rem))] flex-col gap-3 overflow-y-auto overscroll-contain sm:right-4 sm:top-4 sm:w-[min(480px,calc(100vw-2rem))]">
