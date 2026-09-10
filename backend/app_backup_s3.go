@@ -58,7 +58,10 @@ func (a *App) backupS3Client(input map[string]string) (*s3.Client, error) {
 }
 
 func (a *App) BackupS3Upload(input map[string]string) (map[string]interface{}, error) {
-	a.maintenanceMu.Lock()
+	if err := a.lockBackupMaintenance(); err != nil {
+		a.backupEmitExportProgress("error", 100, fmt.Sprintf("S3 备份失败: %v", err))
+		return nil, err
+	}
 	defer a.maintenanceMu.Unlock()
 	return a.backupS3UploadLocked(input)
 }
@@ -98,7 +101,10 @@ func (a *App) backupS3UploadLocked(input map[string]string) (map[string]interfac
 }
 
 func (a *App) BackupS3Restore(input map[string]string, fileName string) (map[string]interface{}, error) {
-	a.maintenanceMu.Lock()
+	if err := a.lockBackupImportMaintenance(); err != nil {
+		a.backupEmitImportProgress("error", 100, fmt.Sprintf("S3 备份恢复失败: %v", err))
+		return nil, err
+	}
 	defer a.maintenanceMu.Unlock()
 
 	client, err := a.backupS3Client(input)

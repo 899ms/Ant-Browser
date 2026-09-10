@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestClientRejectsInvalidInput(t *testing.T) {
@@ -100,6 +101,104 @@ func TestClientUploadWithProgressReportsTransfer(t *testing.T) {
 	}
 	if len(updates) == 0 || updates[len(updates)-1].BytesTransferred != int64(len(content)) {
 		t.Fatalf(`progress updates = %+v, want completed transfer`, updates)
+	}
+}
+
+func TestClientUploadSupportsVirtualDiskWithoutMove(t *testing.T) {
+	store := newMemoryWebDAV()
+	store.rejectMoves = true
+	server := store.server()
+	defer server.Close()
+	client, err := NewClient(Config{
+		BaseURL:    server.URL + `/dav`,
+		RemotePath: `backups`,
+		Token:      `secret`,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	localPath := t.TempDir() + `/source.zip`
+	content := []byte(`virtual-disk-backup`)
+	if err := os.WriteFile(localPath, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	remoteFile, err := client.Upload(context.Background(), localPath, `ant-chrome-virtual-disk.zip`)
+	if err != nil {
+		t.Fatalf(`upload failed: %v`, err)
+	}
+	if remoteFile.Name != `ant-chrome-virtual-disk.zip` || remoteFile.Size != int64(len(content)) {
+		t.Fatalf(`unexpected remote file: %+v`, remoteFile)
+	}
+	if !store.hasFile(`backups/ant-chrome-virtual-disk.zip`) {
+		t.Fatal(`final remote file was not uploaded`)
+	}
+}
+
+func TestClientTreatsTimedOutPutAsCompletedWhenRemoteFileExists(t *testing.T) {
+	store := newMemoryWebDAV()
+	store.hangPutResponse = true
+	server := store.server()
+	defer server.Close()
+	client, err := NewClient(Config{
+		BaseURL:    server.URL + `/dav`,
+		RemotePath: `backups`,
+		Token:      `secret`,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.controlTimeout = 100 * time.Millisecond
+	transport, ok := client.httpClient.Transport.(*http.Transport)
+	if !ok {
+		t.Fatal(`expected cloned HTTP transport`)
+	}
+	transport.ResponseHeaderTimeout = 20 * time.Millisecond
+	localPath := t.TempDir() + `/source.zip`
+	content := []byte(`completed-before-response`)
+	if err := os.WriteFile(localPath, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	startedAt := time.Now()
+	remoteFile, err := client.Upload(context.Background(), localPath, `ant-chrome-timeout-completed.zip`)
+	if err != nil {
+		t.Fatalf(`upload failed: %v`, err)
+	}
+	if remoteFile.Size != int64(len(content)) {
+		t.Fatalf(`remote file size = %d, want %d`, remoteFile.Size, len(content))
+	}
+	if elapsed := time.Since(startedAt); elapsed > time.Second {
+		t.Fatalf(`upload took %s, expected timeout recovery`, elapsed)
+	}
+}
+
+func TestClientUploadLimitsRemoteVerificationTimeout(t *testing.T) {
+	store := newMemoryWebDAV()
+	store.hangFileStat = true
+	server := store.server()
+	defer server.Close()
+	client, err := NewClient(Config{
+		BaseURL:    server.URL + `/dav`,
+		RemotePath: `backups`,
+		Token:      `secret`,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.controlTimeout = 20 * time.Millisecond
+	localPath := t.TempDir() + `/source.zip`
+	if err := os.WriteFile(localPath, []byte(`verification-timeout`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	startedAt := time.Now()
+	_, err = client.Upload(context.Background(), localPath, `ant-chrome-verification-timeout.zip`)
+	if err == nil {
+		t.Fatal(`expected remote verification timeout`)
+	}
+	if elapsed := time.Since(startedAt); elapsed > time.Second {
+		t.Fatalf(`upload took %s, expected control timeout`, elapsed)
 	}
 }
 

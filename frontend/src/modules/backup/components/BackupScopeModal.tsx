@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
+import { Search } from 'lucide-react'
 
-import { Button, Modal } from '../../../shared/components'
+import { Button, Input, Modal } from '../../../shared/components'
 import { fetchBrowserProfiles } from '../../browser/api/profiles'
 import type { BrowserProfile } from '../../browser/types'
 
@@ -22,6 +23,7 @@ export function BackupScopeModal({
   const [scope, setScope] = useState<BackupScope>('full')
   const [profiles, setProfiles] = useState<BrowserProfile[]>([])
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [profileQuery, setProfileQuery] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
@@ -30,6 +32,7 @@ export function BackupScopeModal({
     const selected = new Set(initialProfileIds.filter(Boolean))
     setScope(selected.size > 0 ? 'profiles' : 'full')
     setSelectedIds(selected)
+    setProfileQuery('')
     setError('')
     setLoading(true)
 
@@ -62,6 +65,15 @@ export function BackupScopeModal({
     () => profiles.filter(profile => !profile.running),
     [profiles],
   )
+  const filteredProfiles = useMemo(() => {
+    const query = profileQuery.trim().toLocaleLowerCase()
+    if (!query) return profiles
+
+    return profiles.filter(profile => (
+      profile.profileName.toLocaleLowerCase().includes(query)
+      || profile.profileId.toLocaleLowerCase().includes(query)
+    ))
+  }, [profileQuery, profiles])
   const allSelected = selectableProfiles.length > 0 && selectableProfiles.every(profile => selectedIds.has(profile.profileId))
 
   const toggleProfile = (profileId: string) => {
@@ -159,31 +171,49 @@ export function BackupScopeModal({
               </button>
               <span className="text-[var(--color-text-muted)]">已选 {selectedIds.size}</span>
             </div>
+            {!loading && profiles.length > 0 && (
+              <div className="border-b border-[var(--color-border-muted)] p-2">
+                <div className="relative">
+                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--color-text-muted)]" />
+                  <Input
+                    aria-label="搜索实例"
+                    value={profileQuery}
+                    onChange={event => setProfileQuery(event.target.value)}
+                    placeholder="搜索实例名称或 ID"
+                    className="w-full pl-9"
+                  />
+                </div>
+              </div>
+            )}
             <div className="max-h-64 overflow-y-auto p-2">
               {loading && <p className="px-2 py-5 text-center text-sm text-[var(--color-text-muted)]">读取实例中...</p>}
               {!loading && profiles.length === 0 && <p className="px-2 py-5 text-center text-sm text-[var(--color-text-muted)]">暂无可备份实例</p>}
               {!loading && profiles.length > 0 && (
-                <div className="space-y-1">
-                  {profiles.map(profile => {
-                    const disabled = profile.running
-                    return (
-                      <label
-                        key={profile.profileId}
-                        className={`flex items-center gap-2 rounded-md px-2 py-2 text-sm ${disabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer hover:bg-[var(--color-bg-muted)]'}`}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={selectedIds.has(profile.profileId)}
-                          onChange={() => toggleProfile(profile.profileId)}
-                          disabled={disabled}
-                          className="h-4 w-4 accent-[var(--color-accent)]"
-                        />
-                        <span className="min-w-0 flex-1 truncate text-[var(--color-text-primary)]">{profile.profileName || profile.profileId}</span>
-                        {disabled && <span className="shrink-0 text-xs text-[var(--color-warning)]">运行中</span>}
-                      </label>
-                    )
-                  })}
-                </div>
+                filteredProfiles.length > 0 ? (
+                  <div className="space-y-1">
+                    {filteredProfiles.map(profile => {
+                      const disabled = profile.running
+                      return (
+                        <label
+                          key={profile.profileId}
+                          className={`flex items-center gap-2 rounded-md px-2 py-2 text-sm ${disabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer hover:bg-[var(--color-bg-muted)]'}`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={selectedIds.has(profile.profileId)}
+                            onChange={() => toggleProfile(profile.profileId)}
+                            disabled={disabled}
+                            className="h-4 w-4 accent-[var(--color-accent)]"
+                          />
+                          <span className="min-w-0 flex-1 truncate text-[var(--color-text-primary)]">{profile.profileName || profile.profileId}</span>
+                          {disabled && <span className="shrink-0 text-xs text-[var(--color-warning)]">运行中</span>}
+                        </label>
+                      )
+                    })}
+                  </div>
+                ) : (
+                  <p className="px-2 py-5 text-center text-sm text-[var(--color-text-muted)]">没有匹配的实例</p>
+                )
               )}
             </div>
           </div>

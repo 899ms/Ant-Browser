@@ -7,8 +7,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -41,9 +43,10 @@ type Config struct {
 }
 
 type Client struct {
-	config     Config
-	endpoint   *url.URL
-	httpClient *http.Client
+	config         Config
+	endpoint       *url.URL
+	httpClient     *http.Client
+	controlTimeout time.Duration
 }
 
 type File = channels.File
@@ -102,10 +105,44 @@ func NewClient(configValue Config) (*Client, error) {
 	}
 
 	return &Client{
-		config:     configValue,
-		endpoint:   endpoint,
-		httpClient: &http.Client{Timeout: TransferTimeout},
+		config:         configValue,
+		endpoint:       endpoint,
+		httpClient:     newHTTPClient(),
+		controlTimeout: ControlTimeout,
 	}, nil
+}
+
+func newHTTPClient() *http.Client {
+	transport, ok := http.DefaultTransport.(*http.Transport)
+	if !ok {
+		return &http.Client{Timeout: TransferTimeout}
+	}
+	transport = transport.Clone()
+	transport.ResponseHeaderTimeout = ControlTimeout
+	return &http.Client{
+		Transport: transport,
+		Timeout:   TransferTimeout,
+	}
+}
+
+func (client *Client) controlContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	timeout := client.controlTimeout
+	if timeout <= 0 {
+		timeout = ControlTimeout
+	}
+	return context.WithTimeout(ctx, timeout)
+}
+
+func (client *Client) cleanupContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if ctx == nil {
+		ctx = context.Background()
+	} else {
+		ctx = context.WithoutCancel(ctx)
+	}
+	return client.controlContext(ctx)
 }
 
 func (client *Client) Test(ctx context.Context) error {
@@ -267,7 +304,7 @@ func (client *Client) uploadFile(ctx context.Context, localPath, fileName, artif
 	}
 	defer file.Close()
 
-	payloadHash, err := hashFile(file)
+	payloadHash, err := hashFile(ctx, file, info.Size(), progress)
 	if err != nil {
 		return File{}, fmt.Errorf("hash local %s failed: %w", artifactName, err)
 	}
@@ -285,6 +322,14 @@ func (client *Client) uploadFile(ctx context.Context, localPath, fileName, artif
 	client.signRequest(request, time.Now().UTC(), payloadHash)
 	response, err := client.httpClient.Do(request)
 	if err != nil {
+		if isTimeoutError(err) {
+			verifyCtx, verifyCancel := client.cleanupContext(ctx)
+			remoteFile, verifyErr := client.statObjectForName(verifyCtx, fileName)
+			verifyCancel()
+			if verifyErr == nil && remoteFile.Size == info.Size() {
+				return remoteFile, nil
+			}
+		}
 		return File{}, fmt.Errorf("upload %s failed: %w", artifactName, err)
 	}
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
@@ -296,7 +341,9 @@ func (client *Client) uploadFile(ctx context.Context, localPath, fileName, artif
 		return File{}, fmt.Errorf("close S3 upload response failed: %w", err)
 	}
 
-	remoteFile, err := client.statObjectForName(ctx, fileName)
+	controlCtx, controlCancel := client.controlContext(ctx)
+	remoteFile, err := client.statObjectForName(controlCtx, fileName)
+	controlCancel()
 	if err != nil {
 		return File{}, fmt.Errorf("verify remote %s failed: %w", artifactName, err)
 	}
@@ -663,15 +710,80 @@ func hexHash(value string) string {
 	return hex.EncodeToString(digest[:])
 }
 
-func hashFile(file *os.File) (string, error) {
+func hashFile(ctx context.Context, file *os.File, totalBytes int64, progress channels.UploadProgressFunc) (string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if totalBytes < 0 {
+		totalBytes = 0
+	}
 	digest := sha256.New()
-	if _, err := io.Copy(digest, file); err != nil {
-		return "", err
+	buffer := make([]byte, 1024*1024)
+	startedAt := time.Now()
+	lastReportedAt := startedAt
+	lastReportedBytes := int64(0)
+	processedBytes := int64(0)
+	report := func(force bool) {
+		if progress == nil {
+			return
+		}
+		now := time.Now()
+		if !force && now.Sub(lastReportedAt) < 250*time.Millisecond {
+			return
+		}
+		elapsed := now.Sub(lastReportedAt).Seconds()
+		if elapsed <= 0 {
+			elapsed = now.Sub(startedAt).Seconds()
+		}
+		bytesPerSecond := 0.0
+		if elapsed > 0 {
+			bytesPerSecond = float64(processedBytes-lastReportedBytes) / elapsed
+		}
+		progress(channels.UploadProgress{
+			BytesTransferred: processedBytes,
+			TotalBytes:       totalBytes,
+			BytesPerSecond:   bytesPerSecond,
+		})
+		lastReportedAt = now
+		lastReportedBytes = processedBytes
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		default:
+		}
+		read, readErr := file.Read(buffer)
+		if read > 0 {
+			if _, err := digest.Write(buffer[:read]); err != nil {
+				return "", err
+			}
+			processedBytes += int64(read)
+			report(false)
+		}
+		if readErr == io.EOF {
+			break
+		}
+		if readErr != nil {
+			return "", readErr
+		}
 	}
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
 		return "", err
 	}
+	report(true)
 	return hex.EncodeToString(digest.Sum(nil)), nil
+}
+
+func isTimeoutError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var networkError net.Error
+	return errors.As(err, &networkError) && networkError.Timeout()
 }
 
 func ensureContext(ctx context.Context) context.Context {

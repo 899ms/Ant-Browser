@@ -9,12 +9,16 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 type memoryWebDAV struct {
-	mu    sync.Mutex
-	dirs  map[string]bool
-	files map[string][]byte
+	mu              sync.Mutex
+	dirs            map[string]bool
+	files           map[string][]byte
+	rejectMoves     bool
+	hangFileStat    bool
+	hangPutResponse bool
 }
 
 func newMemoryWebDAV() *memoryWebDAV {
@@ -54,8 +58,16 @@ func (store *memoryWebDAV) handle(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		store.files[resource] = data
+		if store.hangPutResponse {
+			<-r.Context().Done()
+			return
+		}
 		w.WriteHeader(http.StatusCreated)
 	case methodMOVE:
+		if store.rejectMoves {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
 		destinationURL, _ := urlpkg.Parse(r.Header.Get(`Destination`))
 		destination := strings.Trim(strings.TrimPrefix(destinationURL.Path, `/dav`), `/`)
 		store.files[destination] = append([]byte(nil), store.files[resource]...)
@@ -73,6 +85,10 @@ func (store *memoryWebDAV) handle(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(data)
 	case methodPROPFIND:
+		if store.hangFileStat && strings.HasSuffix(resource, `.zip`) {
+			time.Sleep(200 * time.Millisecond)
+			return
+		}
 		if resource != `` && !store.dirs[resource] && store.files[resource] == nil {
 			w.WriteHeader(http.StatusNotFound)
 			return

@@ -15,7 +15,10 @@ import (
 
 // BackupCreatePackage 创建一份备份包，并按目的地选择保存到本地和/或上传到远程渠道。
 func (a *App) BackupCreatePackage(input map[string]string) (map[string]interface{}, error) {
-	a.maintenanceMu.Lock()
+	if err := a.lockBackupMaintenance(); err != nil {
+		a.backupEmitExportProgress("error", 100, fmt.Sprintf("备份失败: %v", err))
+		return nil, err
+	}
 	defer a.maintenanceMu.Unlock()
 
 	localEnabled := backupDestinationFlag(input, "local", "localEnabled")
@@ -178,6 +181,41 @@ func (a *App) BackupCreatePackage(input map[string]string) (map[string]interface
 	}
 	a.backupEmitExportProgress("done", 100, result["message"].(string))
 	return result, nil
+}
+
+const backupMaintenanceWaitTimeout = time.Minute
+
+func (a *App) lockBackupMaintenance() error {
+	return a.lockMaintenanceWithNotice(func() {
+		a.backupEmitExportProgress("preparing", 0, "等待其他维护任务完成...")
+	})
+}
+
+func (a *App) lockBackupImportMaintenance() error {
+	return a.lockMaintenanceWithNotice(func() {
+		a.backupEmitImportProgress("preparing", 0, "等待其他维护任务完成...")
+	})
+}
+
+func (a *App) lockMaintenanceWithNotice(notice func()) error {
+	if a == nil {
+		return fmt.Errorf("应用未初始化")
+	}
+	startedAt := time.Now()
+	waitingNotified := false
+	for {
+		if a.maintenanceMu.TryLock() {
+			return nil
+		}
+		if !waitingNotified && notice != nil {
+			notice()
+			waitingNotified = true
+		}
+		if time.Since(startedAt) >= backupMaintenanceWaitTimeout {
+			return fmt.Errorf("已有维护任务正在执行，请稍后重试")
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
 }
 
 func backupProfileIDsFromInput(input map[string]string) ([]string, error) {

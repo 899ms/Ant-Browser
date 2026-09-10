@@ -156,6 +156,64 @@ func TestClientUploadListDownloadWithPrefixAndPagination(t *testing.T) {
 	}
 }
 
+func TestClientTreatsTimedOutPutAsCompletedWhenRemoteFileExists(t *testing.T) {
+	store := newMemoryS3()
+	store.hangPutResponse = true
+	server := httptest.NewServer(store.handler())
+	defer server.Close()
+	client, err := NewClient(Config{
+		Endpoint:        server.URL,
+		Region:          `us-east-1`,
+		Bucket:          `backup-bucket`,
+		AccessKeyID:     `access-key`,
+		SecretAccessKey: `secret-key`,
+		ForcePathStyle:  true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.controlTimeout = 100 * time.Millisecond
+	transport, ok := client.httpClient.Transport.(*http.Transport)
+	if !ok {
+		t.Fatal(`expected cloned HTTP transport`)
+	}
+	transport.ResponseHeaderTimeout = 20 * time.Millisecond
+	localPath := filepath.Join(t.TempDir(), `source.zip`)
+	content := []byte(`completed-before-response`)
+	if err := os.WriteFile(localPath, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	startedAt := time.Now()
+	remoteFile, err := client.Upload(context.Background(), localPath, `ant-chrome-timeout-completed.zip`)
+	if err != nil {
+		t.Fatalf(`upload failed: %v`, err)
+	}
+	if remoteFile.Size != int64(len(content)) {
+		t.Fatalf(`remote file size = %d, want %d`, remoteFile.Size, len(content))
+	}
+	if elapsed := time.Since(startedAt); elapsed > time.Second {
+		t.Fatalf(`upload took %s, expected timeout recovery`, elapsed)
+	}
+}
+
+func TestHashFileHonorsCancellation(t *testing.T) {
+	localPath := filepath.Join(t.TempDir(), `source.zip`)
+	if err := os.WriteFile(localPath, []byte(`hash-content`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.Open(localPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := hashFile(ctx, file, int64(len(`hash-content`)), nil); err != context.Canceled {
+		t.Fatalf(`hashFile error = %v, want context.Canceled`, err)
+	}
+}
+
 func TestNewClientRejectsPrefixTraversal(t *testing.T) {
 	_, err := NewClient(Config{
 		Endpoint:        "https://s3.example.com",
@@ -173,6 +231,7 @@ type memoryS3 struct {
 	mu                  sync.Mutex
 	objects             map[string][]byte
 	payloadHashMismatch bool
+	hangPutResponse     bool
 }
 
 func newMemoryS3() *memoryS3 {
@@ -222,6 +281,10 @@ func (store *memoryS3) handler() http.Handler {
 			store.mu.Lock()
 			store.objects[key] = append([]byte(nil), payload...)
 			store.mu.Unlock()
+			if store.hangPutResponse {
+				<-request.Context().Done()
+				return
+			}
 			response.WriteHeader(http.StatusOK)
 		case http.MethodHead:
 			store.writeHead(response, key)

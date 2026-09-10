@@ -5,8 +5,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -41,9 +43,10 @@ type Config struct {
 type File = channels.File
 
 type Client struct {
-	config     Config
-	baseURL    *url.URL
-	httpClient *http.Client
+	config         Config
+	baseURL        *url.URL
+	httpClient     *http.Client
+	controlTimeout time.Duration
 }
 
 func (c *Client) ID() channels.ID {
@@ -69,10 +72,44 @@ func NewClient(cfg Config) (*Client, error) {
 	cfg.BaseURL = baseURL.String()
 	cfg.RemotePath = remotePath
 	return &Client{
-		config:     cfg,
-		baseURL:    baseURL,
-		httpClient: &http.Client{Timeout: TransferTimeout},
+		config:         cfg,
+		baseURL:        baseURL,
+		httpClient:     newHTTPClient(),
+		controlTimeout: ControlTimeout,
 	}, nil
+}
+
+func newHTTPClient() *http.Client {
+	transport, ok := http.DefaultTransport.(*http.Transport)
+	if !ok {
+		return &http.Client{Timeout: TransferTimeout}
+	}
+	transport = transport.Clone()
+	transport.ResponseHeaderTimeout = ControlTimeout
+	return &http.Client{
+		Transport: transport,
+		Timeout:   TransferTimeout,
+	}
+}
+
+func (c *Client) controlContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	timeout := c.controlTimeout
+	if timeout <= 0 {
+		timeout = ControlTimeout
+	}
+	return context.WithTimeout(ctx, timeout)
+}
+
+func (c *Client) cleanupContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if ctx == nil {
+		ctx = context.Background()
+	} else {
+		ctx = context.WithoutCancel(ctx)
+	}
+	return c.controlContext(ctx)
 }
 
 func (c *Client) Test(ctx context.Context) error {
@@ -151,6 +188,9 @@ func (c *Client) UploadMetadataWithProgress(ctx context.Context, localPath, file
 }
 
 func (c *Client) uploadFile(ctx context.Context, localPath, cleanName, artifactName string, progress channels.UploadProgressFunc) (File, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	info, err := os.Stat(localPath)
 	if err != nil {
 		return File{}, fmt.Errorf(`stat local %s failed: %w`, artifactName, err)
@@ -158,7 +198,10 @@ func (c *Client) uploadFile(ctx context.Context, localPath, cleanName, artifactN
 	if info.IsDir() {
 		return File{}, fmt.Errorf(`local %s path is a directory`, artifactName)
 	}
-	if err := c.ensureRemoteDirectory(ctx); err != nil {
+	controlCtx, controlCancel := c.controlContext(ctx)
+	err = c.ensureRemoteDirectory(controlCtx)
+	controlCancel()
+	if err != nil {
 		return File{}, err
 	}
 	file, err := os.Open(localPath)
@@ -167,24 +210,53 @@ func (c *Client) uploadFile(ctx context.Context, localPath, cleanName, artifactN
 	}
 	defer file.Close()
 
-	temporaryName := cleanName + `.uploading`
-	if err := c.put(ctx, temporaryName, file, info.Size(), progress); err != nil {
-		_ = c.delete(ctx, temporaryName)
+	if err := c.put(ctx, cleanName, file, info.Size(), progress); err != nil {
+		if isTimeoutError(err) {
+			verifyCtx, verifyCancel := c.cleanupContext(ctx)
+			remoteFile, verifyErr := c.stat(verifyCtx, cleanName)
+			verifyCancel()
+			if verifyErr == nil && remoteFile.Size == info.Size() {
+				return remoteFile, nil
+			}
+		}
+		cleanupCtx, cleanupCancel := c.cleanupContext(ctx)
+		_ = c.delete(cleanupCtx, cleanName)
+		cleanupCancel()
 		return File{}, fmt.Errorf(`upload %s failed: %w`, artifactName, err)
 	}
-	if err := c.move(ctx, temporaryName, cleanName); err != nil {
-		_ = c.delete(ctx, temporaryName)
-		return File{}, fmt.Errorf(`finalize remote %s failed: %w`, artifactName, err)
-	}
-	remoteFile, err := c.stat(ctx, cleanName)
+	controlCtx, controlCancel = c.controlContext(ctx)
+	remoteFile, err := c.stat(controlCtx, cleanName)
+	controlCancel()
 	if err != nil {
+		verifyCtx, verifyCancel := c.cleanupContext(ctx)
+		verifiedFile, verifyErr := c.stat(verifyCtx, cleanName)
+		verifyCancel()
+		if verifyErr == nil && verifiedFile.Size == info.Size() {
+			return verifiedFile, nil
+		}
+		cleanupCtx, cleanupCancel := c.cleanupContext(ctx)
+		_ = c.delete(cleanupCtx, cleanName)
+		cleanupCancel()
 		return File{}, fmt.Errorf(`verify remote %s failed: %w`, artifactName, err)
 	}
 	if remoteFile.Size != info.Size() {
-		_ = c.delete(ctx, cleanName)
+		cleanupCtx, cleanupCancel := c.cleanupContext(ctx)
+		_ = c.delete(cleanupCtx, cleanName)
+		cleanupCancel()
 		return File{}, fmt.Errorf(`remote %s size mismatch: local=%d remote=%d`, artifactName, info.Size(), remoteFile.Size)
 	}
 	return remoteFile, nil
+}
+
+func isTimeoutError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var networkError net.Error
+	return errors.As(err, &networkError) && networkError.Timeout()
 }
 
 func (c *Client) Download(ctx context.Context, fileName, localPath string) error {

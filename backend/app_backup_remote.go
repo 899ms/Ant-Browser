@@ -64,7 +64,10 @@ func (a *App) BackupOpenListList(input map[string]string) ([]map[string]interfac
 }
 
 func (a *App) BackupOpenListUpload(input map[string]string) (map[string]interface{}, error) {
-	a.maintenanceMu.Lock()
+	if err := a.lockBackupMaintenance(); err != nil {
+		a.backupEmitExportProgress(`error`, 100, fmt.Sprintf(`OpenList 备份失败: %v`, err))
+		return nil, err
+	}
 	defer a.maintenanceMu.Unlock()
 	return a.backupOpenListUploadLocked(input)
 }
@@ -104,7 +107,10 @@ func (a *App) backupOpenListUploadLocked(input map[string]string) (map[string]in
 }
 
 func (a *App) BackupOpenListRestore(input map[string]string, fileName string) (map[string]interface{}, error) {
-	a.maintenanceMu.Lock()
+	if err := a.lockBackupImportMaintenance(); err != nil {
+		a.backupEmitImportProgress(`error`, 100, fmt.Sprintf(`OpenList 备份恢复失败: %v`, err))
+		return nil, err
+	}
 	defer a.maintenanceMu.Unlock()
 
 	client, err := a.backupOpenListClient(input)
@@ -142,7 +148,9 @@ func (a *App) backupDownloadRemoteFile(client channels.Client, label string, tim
 	if a.config != nil {
 		configuredDirectory = strings.TrimSpace(a.config.Backup.LocalDirectory)
 	}
-	a.maintenanceMu.Lock()
+	if err := a.lockMaintenanceWithNotice(nil); err != nil {
+		return nil, err
+	}
 	defer a.maintenanceMu.Unlock()
 	var savePath string
 	var err error
@@ -189,7 +197,7 @@ func (a *App) backupDownloadRemoteFile(client channels.Client, label string, tim
 	}
 	metadataPath := backupMetadataPath(savePath)
 	remoteMetadataName := filepath.Base(backupMetadataPath(defaultName))
-	metadataContext, metadataCancel := a.backupRemoteContext(timeout)
+	metadataContext, metadataCancel := a.backupRemoteContext(backupRemoteControlTimeout(timeout))
 	metadataErr := client.Download(metadataContext, remoteMetadataName, metadataPath)
 	metadataCancel()
 	if metadataErr != nil {
@@ -265,7 +273,7 @@ func (a *App) backupUploadRemoteArtifacts(target backupRemoteUploadTarget, local
 		return remoteFile, nil
 	}
 	a.backupEmitExportProgressTransfer(`uploading`, 98, metadataMessage, channels.UploadProgress{TotalBytes: metadataSize})
-	metadataContext, metadataCancel := a.backupRemoteContext(target.timeout)
+	metadataContext, metadataCancel := a.backupRemoteContext(backupRemoteControlTimeout(target.timeout))
 	_, metadataErr := backupUploadMetadataWithProgress(metadataContext, target.client, metadataUploadPath, metadataName, a.backupRemoteUploadProgressCallback(target.label, `备份元数据`, 98, 99))
 	metadataCancel()
 	if metadataErr != nil {
@@ -379,7 +387,7 @@ func formatBackupFileSize(size int64) string {
 	}
 	value := float64(size)
 	units := []string{`KB`, `MB`, `GB`, `TB`}
-	unitIndex := 0
+	unitIndex := -1
 	for value >= 1024 && unitIndex < len(units)-1 {
 		value /= 1024
 		unitIndex++
@@ -471,4 +479,11 @@ func (a *App) backupRemoteContext(timeout time.Duration) (context.Context, conte
 		parent = a.ctx
 	}
 	return context.WithTimeout(parent, timeout)
+}
+
+func backupRemoteControlTimeout(timeout time.Duration) time.Duration {
+	if timeout <= 0 || timeout > time.Minute {
+		return time.Minute
+	}
+	return timeout
 }
