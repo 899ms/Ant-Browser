@@ -27,6 +27,7 @@ func TestClientRejectsInvalidInput(t *testing.T) {
 
 func TestClientUploadListDownload(t *testing.T) {
 	store := newMemoryWebDAV()
+	store.dirs[`backups`] = true
 	server := store.server()
 	defer server.Close()
 	client, err := NewClient(Config{
@@ -75,8 +76,51 @@ func TestClientUploadListDownload(t *testing.T) {
 	}
 }
 
+func TestClientTestAcceptsExistingDirectoryWhenMetadataMethodsReturn405(t *testing.T) {
+	store := newMemoryWebDAV()
+	store.dirs[`backups`] = true
+	store.rejectPROPFIND = true
+	server := store.server()
+	defer server.Close()
+	client, err := NewClient(Config{
+		BaseURL:    server.URL + `/dav`,
+		RemotePath: `backups`,
+		Token:      `secret`,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Test(context.Background()); err != nil {
+		t.Fatalf(`connection test failed: %v`, err)
+	}
+	if store.mkcolCalls != 0 {
+		t.Fatalf(`MKCOL calls = %d, want 0`, store.mkcolCalls)
+	}
+}
+
+func TestClientTestRejectsMissingDirectoryWithoutCreating(t *testing.T) {
+	store := newMemoryWebDAV()
+	server := store.server()
+	defer server.Close()
+	client, err := NewClient(Config{
+		BaseURL:    server.URL + `/dav`,
+		RemotePath: `backups`,
+		Token:      `secret`,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Test(context.Background()); err == nil || !strings.Contains(err.Error(), `remote directory`) || !strings.Contains(err.Error(), `backups`) || !strings.Contains(err.Error(), `does not exist`) {
+		t.Fatalf(`connection test error = %v, want missing-directory error`, err)
+	}
+	if store.mkcolCalls != 0 {
+		t.Fatalf(`MKCOL calls = %d, want 0`, store.mkcolCalls)
+	}
+}
+
 func TestClientUploadWithProgressReportsTransfer(t *testing.T) {
 	store := newMemoryWebDAV()
+	store.dirs[`backups`] = true
 	server := store.server()
 	defer server.Close()
 	client, err := NewClient(Config{
@@ -106,6 +150,7 @@ func TestClientUploadWithProgressReportsTransfer(t *testing.T) {
 
 func TestClientUploadSupportsVirtualDiskWithoutMove(t *testing.T) {
 	store := newMemoryWebDAV()
+	store.dirs[`backups`] = true
 	store.rejectMoves = true
 	server := store.server()
 	defer server.Close()
@@ -137,6 +182,7 @@ func TestClientUploadSupportsVirtualDiskWithoutMove(t *testing.T) {
 
 func TestClientTreatsTimedOutPutAsCompletedWhenRemoteFileExists(t *testing.T) {
 	store := newMemoryWebDAV()
+	store.dirs[`backups`] = true
 	store.hangPutResponse = true
 	server := store.server()
 	defer server.Close()
@@ -175,6 +221,7 @@ func TestClientTreatsTimedOutPutAsCompletedWhenRemoteFileExists(t *testing.T) {
 
 func TestClientUploadLimitsRemoteVerificationTimeout(t *testing.T) {
 	store := newMemoryWebDAV()
+	store.dirs[`backups`] = true
 	store.hangFileStat = true
 	server := store.server()
 	defer server.Close()

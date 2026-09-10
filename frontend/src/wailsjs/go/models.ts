@@ -379,11 +379,11 @@ export namespace backend {
 	    packageType?: string;
 	    profileCount?: number;
 	    profileNames?: string[];
-
+	
 	    static createFrom(source: any = {}) {
 	        return new BackupLocalHistoryItem(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.name = source["name"];
@@ -403,11 +403,11 @@ export namespace backend {
 	}
 	export class BackupLocalSettings {
 	    localDirectory: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new BackupLocalSettings(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.localDirectory = source["localDirectory"];
@@ -416,11 +416,11 @@ export namespace backend {
 	export class BackupSelectLocalDirectoryResult {
 	    cancelled: boolean;
 	    localDirectory: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new BackupSelectLocalDirectoryResult(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.cancelled = source["cancelled"];
@@ -779,11 +779,11 @@ export namespace backend {
 	    sourceIndex: number;
 	    mode: string;
 	    profileName: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new ProfilePackageImportAction(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.sourceProfileId = source["sourceProfileId"];
@@ -804,11 +804,11 @@ export namespace backend {
 	    targetMatches: number;
 	    sourceTargetCollision: boolean;
 	    sourceNameCollision: boolean;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new ProfilePackageImportConflict(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.sourceProfileId = source["sourceProfileId"];
@@ -828,18 +828,18 @@ export namespace backend {
 	    actions?: ProfilePackageImportAction[];
 	    conflictMode: string;
 	    confirmConflict: boolean;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new ProfilePackageImportOptions(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.actions = this.convertValues(source["actions"], ProfilePackageImportAction);
 	        this.conflictMode = source["conflictMode"];
 	        this.confirmConflict = source["confirmConflict"];
 	    }
-
+	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -874,11 +874,11 @@ export namespace backend {
 	    suggestedAction: string;
 	    suggestedProfileName: string;
 	    canOverwrite: boolean;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new ProfilePackageImportPreviewProfile(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.sourceIndex = source["sourceIndex"];
@@ -907,11 +907,11 @@ export namespace backend {
 	    canOverwrite: boolean;
 	    conflicts: ProfilePackageImportConflict[];
 	    message: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new ProfilePackageImportPreview(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.profiles = this.convertValues(source["profiles"], ProfilePackageImportPreviewProfile);
@@ -923,7 +923,7 @@ export namespace backend {
 	        this.conflicts = this.convertValues(source["conflicts"], ProfilePackageImportConflict);
 	        this.message = source["message"];
 	    }
-
+	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -942,7 +942,7 @@ export namespace backend {
 		    return a;
 		}
 	}
-
+	
 	export class ProfilePackageImportResult {
 	    renamedCount: number;
 	    cancelled: boolean;
@@ -2125,3 +2125,4 @@ export namespace proxy {
 	}
 
 }
+

@@ -16,7 +16,9 @@ type memoryWebDAV struct {
 	mu              sync.Mutex
 	dirs            map[string]bool
 	files           map[string][]byte
+	mkcolCalls      int
 	rejectMoves     bool
+	rejectPROPFIND  bool
 	hangFileStat    bool
 	hangPutResponse bool
 }
@@ -48,9 +50,9 @@ func (store *memoryWebDAV) handle(w http.ResponseWriter, r *http.Request) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	switch r.Method {
-	case methodMKCOL:
-		store.dirs[resource] = true
-		w.WriteHeader(http.StatusCreated)
+	case `MKCOL`:
+		store.mkcolCalls++
+		w.WriteHeader(http.StatusMethodNotAllowed)
 	case http.MethodPut:
 		data, err := io.ReadAll(r.Body)
 		if err != nil {
@@ -84,7 +86,22 @@ func (store *memoryWebDAV) handle(w http.ResponseWriter, r *http.Request) {
 		}
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(data)
+	case http.MethodHead:
+		if resource != `` && !store.dirs[resource] {
+			if _, exists := store.files[resource]; !exists {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+		}
+		if store.dirs[resource] {
+			w.Header().Set(`Content-Type`, `httpd/unix-directory`)
+		}
+		w.WriteHeader(http.StatusOK)
 	case methodPROPFIND:
+		if store.rejectPROPFIND {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
 		if store.hangFileStat && strings.HasSuffix(resource, `.zip`) {
 			time.Sleep(200 * time.Millisecond)
 			return

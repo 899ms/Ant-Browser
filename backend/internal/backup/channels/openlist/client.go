@@ -21,7 +21,6 @@ import (
 )
 
 const (
-	methodMKCOL    = `MKCOL`
 	methodMOVE     = `MOVE`
 	methodPROPFIND = `PROPFIND`
 	propfindBody   = `<?xml version='1.0' encoding='utf-8'?><d:propfind xmlns:d='DAV:'><d:prop><d:displayname/><d:getcontentlength/><d:getlastmodified/><d:resourcetype/></d:prop></d:propfind>`
@@ -113,11 +112,10 @@ func (c *Client) cleanupContext(ctx context.Context) (context.Context, context.C
 }
 
 func (c *Client) Test(ctx context.Context) error {
-	if err := c.ensureRemoteDirectory(ctx); err != nil {
+	if err := c.validateRemoteDirectory(ctx); err != nil {
 		return err
 	}
-	_, err := c.propfind(ctx, ``, `0`)
-	return err
+	return c.probeRemoteDirectory(ctx, ``, true)
 }
 
 func (c *Client) List(ctx context.Context) ([]File, error) {
@@ -199,7 +197,7 @@ func (c *Client) uploadFile(ctx context.Context, localPath, cleanName, artifactN
 		return File{}, fmt.Errorf(`local %s path is a directory`, artifactName)
 	}
 	controlCtx, controlCancel := c.controlContext(ctx)
-	err = c.ensureRemoteDirectory(controlCtx)
+	err = c.validateRemoteDirectory(controlCtx)
 	controlCancel()
 	if err != nil {
 		return File{}, err
@@ -301,7 +299,7 @@ func (c *Client) Download(ctx context.Context, fileName, localPath string) error
 	return nil
 }
 
-func (c *Client) ensureRemoteDirectory(ctx context.Context) error {
+func (c *Client) validateRemoteDirectory(ctx context.Context) error {
 	segments, err := cleanPathSegments(c.config.RemotePath, true)
 	if err != nil {
 		return err
@@ -313,22 +311,14 @@ func (c *Client) ensureRemoteDirectory(ctx context.Context) error {
 		} else {
 			current = pathpkg.Join(current, segment)
 		}
-		response, requestErr := c.requestAtPath(ctx, methodMKCOL, current, nil, -1, nil, false)
-		if requestErr != nil {
-			return requestErr
+		exists, probeErr := c.remoteDirectoryExists(ctx, current, false)
+		if probeErr != nil {
+			return fmt.Errorf(`check remote directory %q failed: %w`, current, probeErr)
 		}
-		if isSuccess(response.StatusCode) {
-			_ = response.Body.Close()
+		if exists {
 			continue
 		}
-		statusCode := response.StatusCode
-		_ = response.Body.Close()
-		if statusCode != http.StatusMethodNotAllowed && statusCode != http.StatusConflict {
-			return fmt.Errorf(`create remote directory failed: HTTP %d`, statusCode)
-		}
-		if _, statErr := c.propfindAtPath(ctx, current, `0`, false); statErr != nil {
-			return fmt.Errorf(`create remote directory failed: %w`, statErr)
-		}
+		return fmt.Errorf(`remote directory %q does not exist`, current)
 	}
 	return nil
 }
@@ -414,6 +404,61 @@ func (c *Client) propfindAtPath(ctx context.Context, remotePath, depth string, i
 		return nil, fmt.Errorf(`read remote directory failed: %w`, err)
 	}
 	return parsePropfind(data)
+}
+
+func (c *Client) probeRemoteDirectory(ctx context.Context, remotePath string, includeRoot bool) error {
+	if _, err := c.propfindAtPath(ctx, remotePath, `0`, includeRoot); err == nil {
+		return nil
+	} else if !isRemoteHTTPStatus(err, http.StatusMethodNotAllowed) {
+		return err
+	} else {
+		exists, headErr := c.headDirectoryAtPath(ctx, remotePath, includeRoot)
+		if headErr == nil && exists {
+			return nil
+		}
+		if headErr != nil && !isRemoteHTTPStatus(headErr, http.StatusNotFound) && !isRemoteHTTPStatus(headErr, http.StatusMethodNotAllowed) {
+			return headErr
+		}
+		return err
+	}
+}
+
+func (c *Client) remoteDirectoryExists(ctx context.Context, remotePath string, includeRoot bool) (bool, error) {
+	if _, err := c.propfindAtPath(ctx, remotePath, `0`, includeRoot); err == nil {
+		return true, nil
+	} else if isRemoteHTTPStatus(err, http.StatusNotFound) {
+		return false, nil
+	} else if !isRemoteHTTPStatus(err, http.StatusMethodNotAllowed) {
+		return false, err
+	} else {
+		exists, headErr := c.headDirectoryAtPath(ctx, remotePath, includeRoot)
+		if headErr == nil {
+			return exists, nil
+		}
+		if isRemoteHTTPStatus(headErr, http.StatusNotFound) || isRemoteHTTPStatus(headErr, http.StatusMethodNotAllowed) {
+			return false, nil
+		}
+		return false, headErr
+	}
+}
+
+func (c *Client) headDirectoryAtPath(ctx context.Context, remotePath string, includeRoot bool) (bool, error) {
+	response, err := c.requestAtPath(ctx, http.MethodHead, remotePath, nil, -1, nil, includeRoot)
+	if err != nil {
+		return false, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode == http.StatusNotFound {
+		return false, responseError(response)
+	}
+	if !isSuccess(response.StatusCode) {
+		return false, responseError(response)
+	}
+	contentType := strings.ToLower(strings.TrimSpace(response.Header.Get(`Content-Type`)))
+	if contentType != `httpd/unix-directory` && !strings.HasPrefix(contentType, `httpd/unix-directory;`) {
+		return false, fmt.Errorf(`remote path is not a directory`)
+	}
+	return true, nil
 }
 
 func (c *Client) request(ctx context.Context, method, remotePath string, body io.Reader, contentLength int64, headers map[string]string) (*http.Response, error) {
@@ -652,6 +697,20 @@ func hrefBaseName(value string) string {
 	return pathpkg.Base(strings.TrimRight(pathValue, `/`))
 }
 
+type remoteHTTPError struct {
+	statusCode int
+	message    string
+}
+
+func (e *remoteHTTPError) Error() string {
+	return e.message
+}
+
+func isRemoteHTTPStatus(err error, statusCode int) bool {
+	var responseErr *remoteHTTPError
+	return errors.As(err, &responseErr) && responseErr.statusCode == statusCode
+}
+
 func responseError(response *http.Response) error {
 	body, _ := io.ReadAll(io.LimitReader(response.Body, 4096))
 	message := strings.TrimSpace(string(body))
@@ -661,7 +720,10 @@ func responseError(response *http.Response) error {
 	if message == `` {
 		message = http.StatusText(response.StatusCode)
 	}
-	return fmt.Errorf(`remote request failed: HTTP %d: %s`, response.StatusCode, message)
+	return &remoteHTTPError{
+		statusCode: response.StatusCode,
+		message:    fmt.Sprintf(`remote request failed: HTTP %d: %s`, response.StatusCode, message),
+	}
 }
 
 func isSuccess(statusCode int) bool {
