@@ -16,12 +16,63 @@ func TestClientRejectsInvalidInput(t *testing.T) {
 	if _, err := NewClient(Config{BaseURL: `ftp://example.test`}); err == nil {
 		t.Fatal(`expected invalid scheme error`)
 	}
+	if _, err := NewClient(Config{BaseURL: `https://example.test`, Token: `secret`}); err == nil || !strings.Contains(err.Error(), `site root`) {
+		t.Fatalf(`site-root URL error = %v, want WebDAV endpoint error`, err)
+	}
 	client, err := NewClient(Config{BaseURL: `https://example.test/dav`, Token: `secret`})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := client.Upload(context.Background(), `backup.zip`, `../backup.zip`); err == nil {
 		t.Fatal(`expected traversal error`)
+	}
+}
+
+func TestClientReportsWebDAVEndpointErrorBeforeRemoteDirectory(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != `/dav/` {
+			t.Fatalf(`request path = %q, want /dav/`, r.URL.Path)
+		}
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`virtual disk path is missing a mapping ID`))
+	}))
+	defer server.Close()
+
+	client, err := NewClient(Config{
+		BaseURL:    server.URL + `/dav`,
+		RemotePath: `ant-browser`,
+		Token:      `secret`,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Test(context.Background()); err == nil || !strings.Contains(err.Error(), `WebDAV endpoint check failed`) || !strings.Contains(err.Error(), `mapping ID`) {
+		t.Fatalf(`connection test error = %v, want WebDAV endpoint error`, err)
+	}
+}
+
+func TestClientDoesNotFollowWebDAVRedirectAsGet(t *testing.T) {
+	methods := make([]string, 0, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		methods = append(methods, r.Method)
+		w.Header().Set(`Location`, `https://example.test/dav/`)
+		w.WriteHeader(http.StatusMovedPermanently)
+	}))
+	defer server.Close()
+
+	client, err := NewClient(Config{
+		BaseURL: server.URL + `/dav`,
+		Token:   `secret`,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = client.Test(context.Background())
+	if err == nil || !strings.Contains(err.Error(), `configure the final HTTPS WebDAV URL`) {
+		t.Fatalf(`redirect error = %v, want HTTPS configuration guidance`, err)
+	}
+	if len(methods) != 1 || methods[0] != methodPROPFIND {
+		t.Fatalf(`redirect methods = %v, want one PROPFIND request`, methods)
 	}
 }
 
@@ -112,6 +163,53 @@ func TestClientTestRejectsMissingDirectoryWithoutCreating(t *testing.T) {
 	}
 	if err := client.Test(context.Background()); err == nil || !strings.Contains(err.Error(), `remote directory`) || !strings.Contains(err.Error(), `backups`) || !strings.Contains(err.Error(), `does not exist`) {
 		t.Fatalf(`connection test error = %v, want missing-directory error`, err)
+	}
+	if store.mkcolCalls != 0 {
+		t.Fatalf(`MKCOL calls = %d, want 0`, store.mkcolCalls)
+	}
+}
+
+func TestClientFallsBackWhenDirectoryMetadataRejectsTrailingSlash(t *testing.T) {
+	store := newMemoryWebDAV()
+	store.dirs[`backups`] = true
+	store.rejectDirectoryTrailingSlash = true
+	server := store.server()
+	defer server.Close()
+	client, err := NewClient(Config{
+		BaseURL:    server.URL + `/dav`,
+		RemotePath: `backups`,
+		Token:      `secret`,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Test(context.Background()); err != nil {
+		t.Fatalf(`connection test failed: %v`, err)
+	}
+	if _, err := client.List(context.Background()); err != nil {
+		t.Fatalf(`list failed after directory metadata fallback: %v`, err)
+	}
+}
+
+func TestClientUsesOptionsWhenDirectoryMetadataMethodsAreUnavailable(t *testing.T) {
+	store := newMemoryWebDAV()
+	store.dirs[`backups`] = true
+	store.rejectPROPFIND = true
+	store.rejectHEAD = true
+	store.rejectDirectoryTrailingSlash = true
+	store.allowOptions = true
+	server := store.server()
+	defer server.Close()
+	client, err := NewClient(Config{
+		BaseURL:    server.URL + `/dav`,
+		RemotePath: `backups`,
+		Token:      `secret`,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Test(context.Background()); err != nil {
+		t.Fatalf(`connection test failed through OPTIONS: %v`, err)
 	}
 	if store.mkcolCalls != 0 {
 		t.Fatalf(`MKCOL calls = %d, want 0`, store.mkcolCalls)

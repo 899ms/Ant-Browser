@@ -45,6 +45,8 @@ function validateConnection(draft: OpenListDraft, tokenConfigured: boolean): Ope
         errors.baseURL = '地址缺少主机名'
       } else if (parsed.search || parsed.hash) {
         errors.baseURL = '地址不能包含查询参数或片段'
+      } else if (!parsed.pathname || parsed.pathname.replace(/\/+$/, '') === '') {
+        errors.baseURL = '不能填写 OpenList 站点首页，请填写完整 WebDAV 地址（通常以 /dav 结尾）'
       }
     } catch {
       errors.baseURL = '请输入有效的 WebDAV 地址'
@@ -248,7 +250,7 @@ export function OpenListConfigModal({ open, onClose, onConfigured, onBusyChange 
 	        void handleSave()
 	      }}
 	    >
-        <FormItem label="WebDAV 地址" required hint="填写 OpenList 的 WebDAV 地址，例如 http://127.0.0.1:5244/dav" error={fieldErrors.baseURL}>
+        <FormItem label="WebDAV 地址" required hint="填写完整 WebDAV 地址，不是 OpenList 站点首页，例如 http://127.0.0.1:5244/dav" error={fieldErrors.baseURL}>
           <Input
             value={draft.baseURL}
             onChange={event => updateDraft('baseURL', event.target.value)}

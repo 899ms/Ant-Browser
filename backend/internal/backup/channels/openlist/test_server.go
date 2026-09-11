@@ -13,14 +13,17 @@ import (
 )
 
 type memoryWebDAV struct {
-	mu              sync.Mutex
-	dirs            map[string]bool
-	files           map[string][]byte
-	mkcolCalls      int
-	rejectMoves     bool
-	rejectPROPFIND  bool
-	hangFileStat    bool
-	hangPutResponse bool
+	mu                           sync.Mutex
+	dirs                         map[string]bool
+	files                        map[string][]byte
+	mkcolCalls                   int
+	rejectMoves                  bool
+	rejectPROPFIND               bool
+	rejectHEAD                   bool
+	rejectDirectoryTrailingSlash bool
+	allowOptions                 bool
+	hangFileStat                 bool
+	hangPutResponse              bool
 }
 
 func newMemoryWebDAV() *memoryWebDAV {
@@ -49,6 +52,10 @@ func (store *memoryWebDAV) handle(w http.ResponseWriter, r *http.Request) {
 	resource := strings.Trim(strings.TrimPrefix(r.URL.Path, `/dav`), `/`)
 	store.mu.Lock()
 	defer store.mu.Unlock()
+	if store.rejectDirectoryTrailingSlash && resource != `` && strings.HasSuffix(r.URL.Path, `/`) && (r.Method == methodPROPFIND || r.Method == http.MethodHead || r.Method == http.MethodOptions) {
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
 	switch r.Method {
 	case `MKCOL`:
 		store.mkcolCalls++
@@ -87,6 +94,10 @@ func (store *memoryWebDAV) handle(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(data)
 	case http.MethodHead:
+		if store.rejectHEAD {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
 		if resource != `` && !store.dirs[resource] {
 			if _, exists := store.files[resource]; !exists {
 				w.WriteHeader(http.StatusNotFound)
@@ -112,6 +123,14 @@ func (store *memoryWebDAV) handle(w http.ResponseWriter, r *http.Request) {
 		}
 		w.WriteHeader(207)
 		_, _ = w.Write([]byte(store.propfindXML(resource, r.Header.Get(`Depth`))))
+	case http.MethodOptions:
+		if store.allowOptions {
+			w.Header().Set(`DAV`, `1`)
+			w.Header().Set(`Allow`, `OPTIONS, PROPFIND`)
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		w.WriteHeader(http.StatusMethodNotAllowed)
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
 	}

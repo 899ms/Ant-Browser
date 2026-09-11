@@ -79,16 +79,20 @@ func NewClient(cfg Config) (*Client, error) {
 }
 
 func newHTTPClient() *http.Client {
+	client := &http.Client{
+		Timeout: TransferTimeout,
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
 	transport, ok := http.DefaultTransport.(*http.Transport)
 	if !ok {
-		return &http.Client{Timeout: TransferTimeout}
+		return client
 	}
 	transport = transport.Clone()
 	transport.ResponseHeaderTimeout = ControlTimeout
-	return &http.Client{
-		Transport: transport,
-		Timeout:   TransferTimeout,
-	}
+	client.Transport = transport
+	return client
 }
 
 func (c *Client) controlContext(ctx context.Context) (context.Context, context.CancelFunc) {
@@ -112,14 +116,17 @@ func (c *Client) cleanupContext(ctx context.Context) (context.Context, context.C
 }
 
 func (c *Client) Test(ctx context.Context) error {
+	if err := c.probeRemoteDirectory(ctx, `/`, false); err != nil {
+		return fmt.Errorf(`WebDAV endpoint check failed: %w`, err)
+	}
 	if err := c.validateRemoteDirectory(ctx); err != nil {
 		return err
 	}
-	return c.probeRemoteDirectory(ctx, ``, true)
+	return nil
 }
 
 func (c *Client) List(ctx context.Context) ([]File, error) {
-	items, err := c.propfind(ctx, ``, `1`)
+	items, err := c.propfindDirectory(ctx, ``, `1`)
 	if err != nil {
 		return nil, err
 	}
@@ -386,6 +393,19 @@ func (c *Client) propfind(ctx context.Context, remotePath, depth string) ([]File
 	return c.propfindAtPath(ctx, remotePath, depth, true)
 }
 
+func (c *Client) propfindDirectory(ctx context.Context, remotePath, depth string) ([]File, error) {
+	return c.propfindDirectoryAtPath(ctx, remotePath, depth, true)
+}
+
+func (c *Client) propfindDirectoryAtPath(ctx context.Context, remotePath, depth string, includeRoot bool) ([]File, error) {
+	directoryPath := directoryRemotePath(remotePath)
+	items, err := c.propfindAtPath(ctx, directoryPath, depth, includeRoot)
+	if err == nil || (!isRemoteHTTPStatus(err, http.StatusNotFound) && !isRemoteHTTPStatus(err, http.StatusMethodNotAllowed)) {
+		return items, err
+	}
+	return c.propfindAtPath(ctx, remotePath, depth, includeRoot)
+}
+
 func (c *Client) propfindAtPath(ctx context.Context, remotePath, depth string, includeRoot bool) ([]File, error) {
 	body := bytes.NewReader([]byte(propfindBody))
 	response, err := c.requestAtPath(ctx, methodPROPFIND, remotePath, body, int64(len(propfindBody)), map[string]string{
@@ -407,7 +427,7 @@ func (c *Client) propfindAtPath(ctx context.Context, remotePath, depth string, i
 }
 
 func (c *Client) probeRemoteDirectory(ctx context.Context, remotePath string, includeRoot bool) error {
-	if _, err := c.propfindAtPath(ctx, remotePath, `0`, includeRoot); err == nil {
+	if _, err := c.propfindDirectoryAtPath(ctx, remotePath, `0`, includeRoot); err == nil {
 		return nil
 	} else if !isRemoteHTTPStatus(err, http.StatusMethodNotAllowed) {
 		return err
@@ -416,7 +436,13 @@ func (c *Client) probeRemoteDirectory(ctx context.Context, remotePath string, in
 		if headErr == nil && exists {
 			return nil
 		}
-		if headErr != nil && !isRemoteHTTPStatus(headErr, http.StatusNotFound) && !isRemoteHTTPStatus(headErr, http.StatusMethodNotAllowed) {
+		if isRemoteHTTPStatus(headErr, http.StatusMethodNotAllowed) {
+			if exists, optionsErr := c.optionsDirectoryAtPath(ctx, remotePath, includeRoot); optionsErr == nil && exists {
+				return nil
+			} else if optionsErr != nil && !isRemoteHTTPStatus(optionsErr, http.StatusNotFound) && !isRemoteHTTPStatus(optionsErr, http.StatusMethodNotAllowed) {
+				return fmt.Errorf(`%w (PROPFIND fallback: %v)`, optionsErr, err)
+			}
+		} else if headErr != nil && !isRemoteHTTPStatus(headErr, http.StatusNotFound) {
 			return headErr
 		}
 		return err
@@ -424,7 +450,7 @@ func (c *Client) probeRemoteDirectory(ctx context.Context, remotePath string, in
 }
 
 func (c *Client) remoteDirectoryExists(ctx context.Context, remotePath string, includeRoot bool) (bool, error) {
-	if _, err := c.propfindAtPath(ctx, remotePath, `0`, includeRoot); err == nil {
+	if _, err := c.propfindDirectoryAtPath(ctx, remotePath, `0`, includeRoot); err == nil {
 		return true, nil
 	} else if isRemoteHTTPStatus(err, http.StatusNotFound) {
 		return false, nil
@@ -435,7 +461,17 @@ func (c *Client) remoteDirectoryExists(ctx context.Context, remotePath string, i
 		if headErr == nil {
 			return exists, nil
 		}
-		if isRemoteHTTPStatus(headErr, http.StatusNotFound) || isRemoteHTTPStatus(headErr, http.StatusMethodNotAllowed) {
+		if isRemoteHTTPStatus(headErr, http.StatusMethodNotAllowed) {
+			if exists, optionsErr := c.optionsDirectoryAtPath(ctx, remotePath, includeRoot); optionsErr == nil {
+				return exists, nil
+			} else if isRemoteHTTPStatus(optionsErr, http.StatusNotFound) {
+				return false, nil
+			} else if !isRemoteHTTPStatus(optionsErr, http.StatusMethodNotAllowed) {
+				return false, fmt.Errorf(`%w (PROPFIND fallback: %v)`, optionsErr, err)
+			}
+			return false, headErr
+		}
+		if isRemoteHTTPStatus(headErr, http.StatusNotFound) {
 			return false, nil
 		}
 		return false, headErr
@@ -443,6 +479,15 @@ func (c *Client) remoteDirectoryExists(ctx context.Context, remotePath string, i
 }
 
 func (c *Client) headDirectoryAtPath(ctx context.Context, remotePath string, includeRoot bool) (bool, error) {
+	directoryPath := directoryRemotePath(remotePath)
+	exists, err := c.headDirectoryAtPathRaw(ctx, directoryPath, includeRoot)
+	if err == nil || (!isRemoteHTTPStatus(err, http.StatusNotFound) && !isRemoteHTTPStatus(err, http.StatusMethodNotAllowed)) {
+		return exists, err
+	}
+	return c.headDirectoryAtPathRaw(ctx, remotePath, includeRoot)
+}
+
+func (c *Client) headDirectoryAtPathRaw(ctx context.Context, remotePath string, includeRoot bool) (bool, error) {
 	response, err := c.requestAtPath(ctx, http.MethodHead, remotePath, nil, -1, nil, includeRoot)
 	if err != nil {
 		return false, err
@@ -457,6 +502,38 @@ func (c *Client) headDirectoryAtPath(ctx context.Context, remotePath string, inc
 	contentType := strings.ToLower(strings.TrimSpace(response.Header.Get(`Content-Type`)))
 	if contentType != `httpd/unix-directory` && !strings.HasPrefix(contentType, `httpd/unix-directory;`) {
 		return false, fmt.Errorf(`remote path is not a directory`)
+	}
+	return true, nil
+}
+
+func (c *Client) optionsDirectoryAtPath(ctx context.Context, remotePath string, includeRoot bool) (bool, error) {
+	directoryPath := directoryRemotePath(remotePath)
+	exists, err := c.optionsDirectoryAtPathRaw(ctx, directoryPath, includeRoot)
+	if err == nil || (!isRemoteHTTPStatus(err, http.StatusNotFound) && !isRemoteHTTPStatus(err, http.StatusMethodNotAllowed)) {
+		return exists, err
+	}
+	return c.optionsDirectoryAtPathRaw(ctx, remotePath, includeRoot)
+}
+
+func (c *Client) optionsDirectoryAtPathRaw(ctx context.Context, remotePath string, includeRoot bool) (bool, error) {
+	response, err := c.requestAtPath(ctx, http.MethodOptions, remotePath, nil, -1, nil, includeRoot)
+	if err != nil {
+		return false, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode == http.StatusNotFound {
+		return false, responseError(response)
+	}
+	if !isSuccess(response.StatusCode) {
+		return false, responseError(response)
+	}
+	dav := strings.TrimSpace(response.Header.Get(`DAV`))
+	allow := strings.ToUpper(response.Header.Get(`Allow`))
+	if !strings.Contains(allow, methodPROPFIND) {
+		if dav == `` {
+			return false, fmt.Errorf(`remote path does not advertise WebDAV directory listing`)
+		}
+		return false, fmt.Errorf(`remote path does not advertise WebDAV directory listing in Allow header`)
 	}
 	return true, nil
 }
@@ -515,7 +592,21 @@ func (c *Client) resourceURLAtPath(remotePath string, includeRoot bool) (*url.UR
 		result.Path = pathpkg.Join(result.Path, cleanPath)
 	}
 	result.RawPath = ``
+	if strings.HasSuffix(strings.TrimSpace(remotePath), `/`) && !strings.HasSuffix(result.Path, `/`) {
+		result.Path += `/`
+	}
 	return &result, nil
+}
+
+func directoryRemotePath(value string) string {
+	value = strings.TrimSpace(value)
+	if value == `` || value == `/` {
+		return `/`
+	}
+	if strings.HasSuffix(value, `/`) {
+		return value
+	}
+	return value + `/`
 }
 
 func normalizeBaseURL(value string) (*url.URL, error) {
@@ -528,6 +619,9 @@ func normalizeBaseURL(value string) (*url.URL, error) {
 	}
 	if parsed.Host == `` {
 		return nil, fmt.Errorf(`OpenList URL host is empty`)
+	}
+	if strings.Trim(parsed.Path, `/`) == `` {
+		return nil, fmt.Errorf(`OpenList URL cannot be the site root; use the full WebDAV endpoint`)
 	}
 	if parsed.RawQuery != `` || parsed.Fragment != `` {
 		return nil, fmt.Errorf(`OpenList URL must not contain query or fragment`)
@@ -717,6 +811,11 @@ func responseError(response *http.Response) error {
 	if response.StatusCode == http.StatusRequestEntityTooLarge {
 		return fmt.Errorf(`remote request failed: HTTP 413 Request Entity Too Large：远端反向代理拒绝了过大的请求体（通常是 OpenResty/Nginx 的 client_max_body_size），请将其调大到超过备份文件大小；客户端限速和超时无法绕过此限制`)
 	}
+	if isRedirectStatus(response.StatusCode) {
+		if location := strings.TrimSpace(response.Header.Get(`Location`)); location != `` {
+			message = fmt.Sprintf(`WebDAV endpoint redirected to %s; configure the final HTTPS WebDAV URL`, location)
+		}
+	}
 	if message == `` {
 		message = http.StatusText(response.StatusCode)
 	}
@@ -724,6 +823,10 @@ func responseError(response *http.Response) error {
 		statusCode: response.StatusCode,
 		message:    fmt.Sprintf(`remote request failed: HTTP %d: %s`, response.StatusCode, message),
 	}
+}
+
+func isRedirectStatus(statusCode int) bool {
+	return statusCode == http.StatusMovedPermanently || statusCode == http.StatusFound || statusCode == http.StatusSeeOther || statusCode == http.StatusTemporaryRedirect || statusCode == http.StatusPermanentRedirect
 }
 
 func isSuccess(statusCode int) bool {
