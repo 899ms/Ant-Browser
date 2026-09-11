@@ -995,14 +995,6 @@ export function BackupHistoryTable({
         </div>
         <div className="flex max-w-full flex-wrap items-center justify-end gap-2">
           {actions}
-          {filter === 'local' && localDirectory && (
-            <span
-              className="max-w-[260px] truncate text-xs text-[var(--color-text-muted)]"
-              title={localDirectory}
-            >
-              {localDirectory}
-            </span>
-          )}
           <Button size="sm" variant="secondary" className="!border-[var(--color-border-default)] !bg-[var(--color-bg-muted)] !text-[var(--color-text-primary)] hover:!border-[var(--color-border-strong)] hover:!bg-[var(--color-border-default)]" onClick={handleRefresh} loading={busy === 'list'} disabled={busy !== 'none' || pendingRestoreItem !== null || restoreConfirming || profileImportPreview !== null || profileImportBusy || openingLocationId !== ''}>
             <RefreshCw className="h-4 w-4" />
             刷新

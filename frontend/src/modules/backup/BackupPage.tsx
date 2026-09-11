@@ -516,7 +516,6 @@ export function BackupPage() {
 
       <BackupChannelConfigModal
         open={channelConfigModalOpen}
-        localDirectory={localBackupDirectory}
         onLocalConfigured={directory => {
           setLocalBackupDirectory(directory)
           setHistoryRefreshToken(previous => previous + 1)
