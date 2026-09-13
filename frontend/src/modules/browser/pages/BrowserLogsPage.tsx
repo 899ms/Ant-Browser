@@ -46,7 +46,7 @@ async function clearLogs() {
 
 export function BrowserLogsPage() {
   const [logs, setLogs] = useState<LogEntry[]>([])
-  const [levelFilter, setLevelFilter] = useState('ALL')
+  const [levelFilter, setLevelFilter] = useState('INFO')
   const [componentFilter, setComponentFilter] = useState('ALL')
   const [methodFilter, setMethodFilter] = useState('ALL')
   const [keyword, setKeyword] = useState('')
@@ -127,7 +127,7 @@ export function BrowserLogsPage() {
   const components = Array.from(new Set(logs.map(entry => entry.component).filter(Boolean))).sort()
   const methods = Array.from(new Set(logs.map(entry => String(entry.fields?.method || '')).filter(Boolean))).sort()
   const resetFilters = () => {
-    setLevelFilter('ALL')
+    setLevelFilter('INFO')
     setComponentFilter('ALL')
     setMethodFilter('ALL')
     setQuickFilter('ALL')
