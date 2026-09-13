@@ -389,7 +389,7 @@ export function BackupPage() {
   }
 
   return (
-    <div className="w-full space-y-5 animate-fade-in">
+    <div className="w-full space-y-4 animate-fade-in">
       {exportProgress && (
         <div className="space-y-2 rounded-xl border border-[var(--color-border-default)] bg-[var(--color-bg-surface)] px-4 py-3" role="status" aria-live="polite">
           <div className="flex items-center justify-between gap-3 text-xs">

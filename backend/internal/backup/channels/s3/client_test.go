@@ -122,6 +122,9 @@ func TestClientUploadListDownloadWithPrefixAndPagination(t *testing.T) {
 	if len(updates) == 0 || updates[len(updates)-1].BytesTransferred != int64(len(content)) {
 		t.Fatalf("progress updates = %+v, want completed transfer", updates)
 	}
+	if updates[len(updates)-1].Stage != channels.UploadProgressStageVerifying {
+		t.Fatalf("last progress stage = %q, want %q", updates[len(updates)-1].Stage, channels.UploadProgressStageVerifying)
+	}
 
 	metadataPath := filepath.Join(t.TempDir(), "source.json")
 	metadata := []byte(`{"format":"ant-chrome-backup-metadata"}`)
@@ -130,6 +133,18 @@ func TestClientUploadListDownloadWithPrefixAndPagination(t *testing.T) {
 	}
 	if _, err := client.UploadMetadata(context.Background(), metadataPath, "ant-chrome-backup-20260831.json"); err != nil {
 		t.Fatalf("upload metadata: %v", err)
+	}
+
+	metadataDownloadPath := filepath.Join(t.TempDir(), `nested`, `restore.json`)
+	if err := client.DownloadMetadata(context.Background(), `ant-chrome-backup-20260831.json`, metadataDownloadPath); err != nil {
+		t.Fatalf(`download metadata: %v`, err)
+	}
+	metadataDownloaded, err := os.ReadFile(metadataDownloadPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(metadataDownloaded, metadata) {
+		t.Fatalf(`downloaded metadata = %q, want %q`, metadataDownloaded, metadata)
 	}
 
 	items, err := client.List(context.Background())

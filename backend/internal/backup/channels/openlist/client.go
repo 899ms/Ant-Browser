@@ -217,6 +217,7 @@ func (c *Client) uploadFile(ctx context.Context, localPath, cleanName, artifactN
 
 	if err := c.put(ctx, cleanName, file, info.Size(), progress); err != nil {
 		if isTimeoutError(err) {
+			reportUploadVerification(progress, info.Size())
 			verifyCtx, verifyCancel := c.cleanupContext(ctx)
 			remoteFile, verifyErr := c.stat(verifyCtx, cleanName)
 			verifyCancel()
@@ -229,6 +230,7 @@ func (c *Client) uploadFile(ctx context.Context, localPath, cleanName, artifactN
 		cleanupCancel()
 		return File{}, fmt.Errorf(`upload %s failed: %w`, artifactName, err)
 	}
+	reportUploadVerification(progress, info.Size())
 	controlCtx, controlCancel = c.controlContext(ctx)
 	remoteFile, err := c.stat(controlCtx, cleanName)
 	controlCancel()
@@ -251,6 +253,17 @@ func (c *Client) uploadFile(ctx context.Context, localPath, cleanName, artifactN
 		return File{}, fmt.Errorf(`remote %s size mismatch: local=%d remote=%d`, artifactName, info.Size(), remoteFile.Size)
 	}
 	return remoteFile, nil
+}
+
+func reportUploadVerification(progress channels.UploadProgressFunc, totalBytes int64) {
+	if progress == nil {
+		return
+	}
+	progress(channels.UploadProgress{
+		BytesTransferred: totalBytes,
+		TotalBytes:       totalBytes,
+		Stage:            channels.UploadProgressStageVerifying,
+	})
 }
 
 func isTimeoutError(err error) bool {
@@ -302,6 +315,52 @@ func (c *Client) Download(ctx context.Context, fileName, localPath string) error
 	if err := os.Rename(temporaryPath, localPath); err != nil {
 		_ = os.Remove(temporaryPath)
 		return fmt.Errorf(`replace downloaded backup failed: %w`, err)
+	}
+	return nil
+}
+
+func (c *Client) DownloadMetadata(ctx context.Context, fileName, localPath string) error {
+	cleanName, err := cleanMetadataFileName(fileName)
+	if err != nil {
+		return err
+	}
+	response, err := c.request(ctx, http.MethodGet, cleanName, nil, -1, nil)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+	if !isSuccess(response.StatusCode) {
+		return responseError(response)
+	}
+	if err := os.MkdirAll(filepath.Dir(localPath), 0o755); err != nil {
+		return fmt.Errorf(`create local backup metadata directory failed: %w`, err)
+	}
+	temporaryPath := localPath + `.tmp`
+	file, err := os.Create(temporaryPath)
+	if err != nil {
+		return fmt.Errorf(`create downloaded backup metadata failed: %w`, err)
+	}
+	written, copyErr := io.Copy(file, io.LimitReader(response.Body, channels.MaxBackupMetadataBytes+1))
+	closeErr := file.Close()
+	if copyErr != nil {
+		_ = os.Remove(temporaryPath)
+		return fmt.Errorf(`download backup metadata failed: %w`, copyErr)
+	}
+	if closeErr != nil {
+		_ = os.Remove(temporaryPath)
+		return fmt.Errorf(`close downloaded backup metadata failed: %w`, closeErr)
+	}
+	if written > channels.MaxBackupMetadataBytes {
+		_ = os.Remove(temporaryPath)
+		return fmt.Errorf(`downloaded backup metadata exceeds %d bytes`, channels.MaxBackupMetadataBytes)
+	}
+	if response.ContentLength >= 0 && written != response.ContentLength {
+		_ = os.Remove(temporaryPath)
+		return fmt.Errorf(`downloaded backup metadata size mismatch: expected=%d actual=%d`, response.ContentLength, written)
+	}
+	if err := os.Rename(temporaryPath, localPath); err != nil {
+		_ = os.Remove(temporaryPath)
+		return fmt.Errorf(`replace downloaded backup metadata failed: %w`, err)
 	}
 	return nil
 }

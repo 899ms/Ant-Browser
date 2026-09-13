@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Search } from 'lucide-react'
 
-import { Button, Input, Modal } from '../../../shared/components'
+import { Button, Input, Modal, Select } from '../../../shared/components'
 import { fetchBrowserProfiles } from '../../browser/api/profiles'
 import type { BrowserProfile } from '../../browser/types'
 
@@ -13,6 +13,38 @@ interface BackupScopeModalProps {
 }
 
 type BackupScope = 'full' | 'profiles'
+type ProfileSort = 'createdAtAsc' | 'createdAtDesc' | 'profileNameAsc' | 'profileNameDesc'
+
+const PROFILE_SORT_OPTIONS = [
+  { value: 'createdAtAsc', label: '创建时间 ↑' },
+  { value: 'createdAtDesc', label: '创建时间 ↓' },
+  { value: 'profileNameAsc', label: '名称 A-Z' },
+  { value: 'profileNameDesc', label: '名称 Z-A' },
+]
+
+function getProfileDisplayName(profile: BrowserProfile) {
+  return profile.profileName.trim() || profile.profileId
+}
+
+function compareProfileName(left: BrowserProfile, right: BrowserProfile) {
+  return getProfileDisplayName(left).localeCompare(getProfileDisplayName(right), 'zh-CN', {
+    numeric: true,
+    sensitivity: 'base',
+  }) || left.profileId.localeCompare(right.profileId)
+}
+
+function compareProfileCreatedAt(left: BrowserProfile, right: BrowserProfile, descending: boolean) {
+  const leftTime = Date.parse(left.createdAt)
+  const rightTime = Date.parse(right.createdAt)
+  const leftValid = Number.isFinite(leftTime)
+  const rightValid = Number.isFinite(rightTime)
+
+  if (leftValid !== rightValid) return leftValid ? -1 : 1
+  if (leftValid && rightValid && leftTime !== rightTime) {
+    return descending ? rightTime - leftTime : leftTime - rightTime
+  }
+  return compareProfileName(left, right)
+}
 
 export function BackupScopeModal({
   open,
@@ -24,6 +56,7 @@ export function BackupScopeModal({
   const [profiles, setProfiles] = useState<BrowserProfile[]>([])
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [profileQuery, setProfileQuery] = useState('')
+  const [profileSort, setProfileSort] = useState<ProfileSort>('createdAtAsc')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
@@ -33,6 +66,7 @@ export function BackupScopeModal({
     setScope(selected.size > 0 ? 'profiles' : 'full')
     setSelectedIds(selected)
     setProfileQuery('')
+    setProfileSort('createdAtAsc')
     setError('')
     setLoading(true)
 
@@ -74,6 +108,16 @@ export function BackupScopeModal({
       || profile.profileId.toLocaleLowerCase().includes(query)
     ))
   }, [profileQuery, profiles])
+  const sortedProfiles = useMemo(() => {
+    const sorted = [...filteredProfiles]
+    sorted.sort((left, right) => {
+      if (profileSort === 'createdAtAsc') return compareProfileCreatedAt(left, right, false)
+      if (profileSort === 'createdAtDesc') return compareProfileCreatedAt(left, right, true)
+      const nameComparison = compareProfileName(left, right)
+      return profileSort === 'profileNameAsc' ? nameComparison : -nameComparison
+    })
+    return sorted
+  }, [filteredProfiles, profileSort])
   const allSelected = selectableProfiles.length > 0 && selectableProfiles.every(profile => selectedIds.has(profile.profileId))
 
   const toggleProfile = (profileId: string) => {
@@ -112,7 +156,7 @@ export function BackupScopeModal({
       open={open}
       onClose={onClose}
       title="选择备份范围"
-      width="560px"
+      width="720px"
       footer={(
         <>
           <Button variant="secondary" onClick={onClose}>取消</Button>
@@ -137,7 +181,6 @@ export function BackupScopeModal({
               />
               全量备份
             </span>
-            <span className="mt-1 block text-xs text-[var(--color-text-muted)]">配置、数据、内核和日志</span>
           </label>
           <label
             className={`rounded-lg border px-3 py-3 text-left transition-colors ${scope === 'profiles' ? 'border-[var(--color-accent)] bg-[var(--color-accent-muted)]' : 'border-[var(--color-border-default)] hover:border-[var(--color-accent)]'}`}
@@ -154,26 +197,23 @@ export function BackupScopeModal({
               />
               选择实例
             </span>
-            <span className="mt-1 block text-xs text-[var(--color-text-muted)]">仅备份实例配置和用户数据</span>
           </label>
         </div>
 
         {scope === 'profiles' && (
           <div className="rounded-lg border border-[var(--color-border-default)]">
-            <div className="flex items-center justify-between border-b border-[var(--color-border-muted)] px-3 py-2 text-xs">
-              <button
-                type="button"
-                className="text-[var(--color-accent)] hover:underline disabled:cursor-not-allowed disabled:opacity-50"
-                onClick={toggleAll}
-                disabled={loading || selectableProfiles.length === 0}
-              >
-                {allSelected ? '取消全选' : '全选可备份实例'}
-              </button>
-              <span className="text-[var(--color-text-muted)]">已选 {selectedIds.size}</span>
-            </div>
             {!loading && profiles.length > 0 && (
-              <div className="border-b border-[var(--color-border-muted)] p-2">
-                <div className="relative">
+              <div className="flex items-center gap-2 border-b border-[var(--color-border-muted)] p-2">
+                <input
+                  type="checkbox"
+                  checked={allSelected}
+                  onChange={() => toggleAll()}
+                  disabled={selectableProfiles.length === 0}
+                  aria-label={allSelected ? '取消全选实例' : '全选实例'}
+                  title={allSelected ? '取消全选' : '全选'}
+                  className="h-4 w-4 shrink-0 accent-[var(--color-accent)]"
+                />
+                <div className="relative min-w-0 flex-1">
                   <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--color-text-muted)]" />
                   <Input
                     aria-label="搜索实例"
@@ -183,15 +223,23 @@ export function BackupScopeModal({
                     className="w-full pl-9"
                   />
                 </div>
+                <span className='shrink-0 text-xs text-[var(--color-text-muted)]'>已选 {selectedIds.size}</span>
+                <Select
+                  aria-label="实例排序"
+                  value={profileSort}
+                  onChange={event => setProfileSort(event.target.value as ProfileSort)}
+                  options={PROFILE_SORT_OPTIONS}
+                  className="w-[150px] shrink-0"
+                />
               </div>
             )}
-            <div className="max-h-64 overflow-y-auto p-2">
+            <div className="max-h-80 overflow-y-auto p-2">
               {loading && <p className="px-2 py-5 text-center text-sm text-[var(--color-text-muted)]">读取实例中...</p>}
               {!loading && profiles.length === 0 && <p className="px-2 py-5 text-center text-sm text-[var(--color-text-muted)]">暂无可备份实例</p>}
               {!loading && profiles.length > 0 && (
-                filteredProfiles.length > 0 ? (
+                sortedProfiles.length > 0 ? (
                   <div className="space-y-1">
-                    {filteredProfiles.map(profile => {
+                    {sortedProfiles.map(profile => {
                       const disabled = profile.running
                       return (
                         <label

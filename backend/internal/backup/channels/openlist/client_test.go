@@ -107,6 +107,25 @@ func TestClientUploadListDownload(t *testing.T) {
 	if store.hasFile(`backups/ant-chrome-backup-20260825.zip.uploading`) {
 		t.Fatal(`temporary remote file was not finalized`)
 	}
+	metadataPath := t.TempDir() + `/source.json`
+	metadata := []byte(`{format:ant-chrome-backup-metadata,version:1}`)
+	if err := os.WriteFile(metadataPath, metadata, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.UploadMetadata(context.Background(), metadataPath, `ant-chrome-backup-20260825.json`); err != nil {
+		t.Fatalf(`metadata upload failed: %v`, err)
+	}
+	metadataDownloadPath := t.TempDir() + `/nested/restore.json`
+	if err := client.DownloadMetadata(context.Background(), `ant-chrome-backup-20260825.json`, metadataDownloadPath); err != nil {
+		t.Fatalf(`metadata download failed: %v`, err)
+	}
+	metadataDownloaded, err := os.ReadFile(metadataDownloadPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(metadataDownloaded) != string(metadata) {
+		t.Fatalf(`downloaded metadata = %q, want %q`, metadataDownloaded, metadata)
+	}
 	items, err := client.List(context.Background())
 	if err != nil {
 		t.Fatalf(`list failed: %v`, err)
@@ -243,6 +262,9 @@ func TestClientUploadWithProgressReportsTransfer(t *testing.T) {
 	}
 	if len(updates) == 0 || updates[len(updates)-1].BytesTransferred != int64(len(content)) {
 		t.Fatalf(`progress updates = %+v, want completed transfer`, updates)
+	}
+	if updates[len(updates)-1].Stage != channels.UploadProgressStageVerifying {
+		t.Fatalf(`last progress stage = %q, want %q`, updates[len(updates)-1].Stage, channels.UploadProgressStageVerifying)
 	}
 }
 

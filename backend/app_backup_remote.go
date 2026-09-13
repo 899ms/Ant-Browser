@@ -24,6 +24,93 @@ type backupRemoteUploadTarget struct {
 	skipMetadata        bool
 }
 
+type backupRemoteMetadataDownloader interface {
+	DownloadMetadata(context.Context, string, string) error
+}
+
+const (
+	backupRemoteHistoryMetadataTimeout     = 5 * time.Second
+	backupRemoteHistoryMetadataConcurrency = 4
+)
+
+func (a *App) backupRemoteHistoryEntries(client backupRemoteMetadataDownloader, items []channels.File, timeout time.Duration) []map[string]interface{} {
+	result := make([]map[string]interface{}, 0, len(items))
+	for _, item := range items {
+		result = append(result, map[string]interface{}{
+			`name`:       item.Name,
+			`size`:       item.Size,
+			`modifiedAt`: item.ModifiedAt,
+		})
+	}
+	if client == nil || len(items) == 0 {
+		return result
+	}
+
+	metadataRoot, err := os.MkdirTemp(``, `ant-chrome-backup-remote-history-`)
+	if err != nil {
+		return result
+	}
+	defer os.RemoveAll(metadataRoot)
+
+	metadataTimeout := backupRemoteHistoryMetadataTimeout
+	if timeout > 0 && timeout < metadataTimeout {
+		metadataTimeout = timeout
+	}
+	metadataContext, metadataCancel := a.backupRemoteContext(metadataTimeout)
+	defer metadataCancel()
+	metadata := make([]backupMetadata, len(items))
+	metadataAvailable := make([]bool, len(items))
+	jobs := make(chan int)
+	workerCount := backupRemoteHistoryMetadataConcurrency
+	if workerCount > len(items) {
+		workerCount = len(items)
+	}
+	done := make(chan struct{}, workerCount)
+	for worker := 0; worker < workerCount; worker++ {
+		go func() {
+			defer func() { done <- struct{}{} }()
+			for index := range jobs {
+				item := items[index]
+				metadataName := filepath.Base(backupMetadataPath(item.Name))
+				metadataPath := filepath.Join(metadataRoot, fmt.Sprintf(`%d-%s`, index, metadataName))
+				downloadErr := client.DownloadMetadata(metadataContext, metadataName, metadataPath)
+				if downloadErr != nil {
+					continue
+				}
+				loaded, metadataErr := readBackupMetadataForFile(metadataPath, filepath.Base(item.Name))
+				if metadataErr != nil {
+					continue
+				}
+				metadata[index] = loaded
+				metadataAvailable[index] = true
+			}
+		}()
+	}
+	for index := range items {
+		jobs <- index
+	}
+	close(jobs)
+	for worker := 0; worker < workerCount; worker++ {
+		<-done
+	}
+
+	for index, itemMetadata := range metadata {
+		if !metadataAvailable[index] {
+			continue
+		}
+		if itemMetadata.PackageType != `` {
+			result[index][`packageType`] = itemMetadata.PackageType
+		}
+		if itemMetadata.ProfileCount > 0 {
+			result[index][`profileCount`] = itemMetadata.ProfileCount
+		}
+		if len(itemMetadata.ProfileNames) > 0 {
+			result[index][`profileNames`] = itemMetadata.ProfileNames
+		}
+	}
+	return result
+}
+
 func (a *App) BackupOpenListTest(input map[string]string) (map[string]interface{}, error) {
 	client, err := a.backupOpenListClient(input)
 	if err != nil {
@@ -51,16 +138,7 @@ func (a *App) BackupOpenListList(input map[string]string) ([]map[string]interfac
 	if err != nil {
 		return nil, fmt.Errorf(`list OpenList backups failed: %w`, err)
 	}
-	result := make([]map[string]interface{}, 0, len(items))
-	for _, item := range items {
-		entry := map[string]interface{}{
-			`name`:       item.Name,
-			`size`:       item.Size,
-			`modifiedAt`: item.ModifiedAt,
-		}
-		result = append(result, entry)
-	}
-	return result, nil
+	return a.backupRemoteHistoryEntries(client, items, openlist.ControlTimeout), nil
 }
 
 func (a *App) BackupOpenListUpload(input map[string]string) (map[string]interface{}, error) {
@@ -197,14 +275,7 @@ func (a *App) backupDownloadRemoteFile(client channels.Client, label string, tim
 	}
 	metadataPath := backupMetadataPath(savePath)
 	remoteMetadataName := filepath.Base(backupMetadataPath(defaultName))
-	metadataContext, metadataCancel := a.backupRemoteContext(backupRemoteControlTimeout(timeout))
-	metadataErr := client.Download(metadataContext, remoteMetadataName, metadataPath)
-	metadataCancel()
-	if metadataErr != nil {
-		_ = os.Remove(metadataPath)
-	} else if metadataErr = normalizeDownloadedBackupMetadata(metadataPath, filepath.Base(savePath)); metadataErr != nil {
-		_ = os.Remove(metadataPath)
-	}
+	metadataErr := a.backupDownloadRemoteMetadata(client, backupRemoteControlTimeout(timeout), remoteMetadataName, metadataPath, filepath.Base(savePath))
 	return map[string]interface{}{
 		`cancelled`:         false,
 		`zipPath`:           savePath,
@@ -214,6 +285,84 @@ func (a *App) backupDownloadRemoteFile(client channels.Client, label string, tim
 		`remoteName`:        trimmedName,
 		`message`:           fmt.Sprintf(`已下载%s备份`, label),
 	}, nil
+}
+
+func (a *App) backupDownloadRemoteMetadata(client backupRemoteMetadataDownloader, timeout time.Duration, remoteMetadataName, metadataPath, backupFileName string) error {
+	metadataDir := filepath.Dir(metadataPath)
+	temporaryRoot, err := os.MkdirTemp(metadataDir, `.`+filepath.Base(metadataPath)+`.download-*`)
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(temporaryRoot)
+	temporaryPath := filepath.Join(temporaryRoot, filepath.Base(metadataPath))
+
+	metadataContext, metadataCancel := a.backupRemoteContext(timeout)
+	metadataErr := client.DownloadMetadata(metadataContext, remoteMetadataName, temporaryPath)
+	metadataCancel()
+	if metadataErr != nil {
+		return metadataErr
+	}
+	if err := normalizeDownloadedBackupMetadata(temporaryPath, backupFileName); err != nil {
+		return err
+	}
+	if err := publishDownloadedBackupMetadata(temporaryPath, metadataPath); err != nil {
+		return err
+	}
+	return nil
+}
+
+func publishDownloadedBackupMetadata(sourcePath, targetPath string) error {
+	if err := os.Rename(sourcePath, targetPath); err == nil {
+		return nil
+	} else {
+		renameErr := err
+		backupPath, backupErr := moveExistingBackupMetadataAside(targetPath)
+		if backupErr != nil {
+			return fmt.Errorf(`replace downloaded backup metadata failed: %w`, renameErr)
+		}
+		if err := os.Rename(sourcePath, targetPath); err != nil {
+			if backupPath != `` {
+				if restoreErr := os.Rename(backupPath, targetPath); restoreErr != nil {
+					return fmt.Errorf(`replace downloaded backup metadata failed: %w; restore existing metadata failed: %v`, err, restoreErr)
+				}
+			}
+			return fmt.Errorf(`replace downloaded backup metadata failed: %w`, err)
+		}
+		if backupPath != `` {
+			_ = os.Remove(backupPath)
+		}
+		return nil
+	}
+}
+
+func moveExistingBackupMetadataAside(targetPath string) (string, error) {
+	info, err := os.Stat(targetPath)
+	if os.IsNotExist(err) {
+		return ``, nil
+	}
+	if err != nil {
+		return ``, err
+	}
+	if info.IsDir() {
+		return ``, fmt.Errorf(`metadata target is a directory`)
+	}
+	temporaryFile, err := os.CreateTemp(filepath.Dir(targetPath), `.`+filepath.Base(targetPath)+`.backup-*`)
+	if err != nil {
+		return ``, err
+	}
+	backupPath := temporaryFile.Name()
+	if err := temporaryFile.Close(); err != nil {
+		_ = os.Remove(backupPath)
+		return ``, err
+	}
+	if err := os.Remove(backupPath); err != nil {
+		return ``, err
+	}
+	if err := os.Rename(targetPath, backupPath); err != nil {
+		_ = os.Remove(backupPath)
+		return ``, err
+	}
+	return backupPath, nil
 }
 
 func normalizeDownloadedBackupMetadata(metadataPath, backupFileName string) error {

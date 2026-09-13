@@ -181,7 +181,7 @@ func (a *App) startupInitLaunchServer(log *logger.Logger) {
 		log.Error("LaunchServer 启动失败", logger.F("error", err))
 		return
 	}
-	log.Info("LaunchServer 监听地址",
+	log.Debug("LaunchServer 监听地址",
 		logger.F("url", fmt.Sprintf("http://127.0.0.1:%d", a.launchServer.Port())),
 		logger.F("preferred_port", port),
 	)

@@ -967,7 +967,7 @@ export function BackupHistoryTable({
 
   return (
     <Card padding="none">
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--color-border-default)] px-5 py-3">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--color-border-default)] px-4 py-2.5">
         <div
           className="min-w-[240px] flex-1"
           role="tablist"
@@ -1001,7 +1001,7 @@ export function BackupHistoryTable({
           </Button>
         </div>
       </div>
-      <div className="space-y-3 p-5">
+      <div className="space-y-3 p-4">
         {error && <p role="alert" className="text-sm text-[var(--color-error)]">{error}</p>}
         <Table
           columns={tableColumns}

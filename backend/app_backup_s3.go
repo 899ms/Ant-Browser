@@ -37,16 +37,7 @@ func (a *App) BackupS3List(input map[string]string) ([]map[string]interface{}, e
 	if err != nil {
 		return nil, fmt.Errorf("S3 \u5907\u4efd\u5217\u8868\u8bfb\u53d6\u5931\u8d25\uff1a%w", err)
 	}
-	result := make([]map[string]interface{}, 0, len(items))
-	for _, item := range items {
-		entry := map[string]interface{}{
-			"name":       item.Name,
-			"size":       item.Size,
-			"modifiedAt": item.ModifiedAt,
-		}
-		result = append(result, entry)
-	}
-	return result, nil
+	return a.backupRemoteHistoryEntries(client, items, s3.ControlTimeout), nil
 }
 
 func (a *App) backupS3Client(input map[string]string) (*s3.Client, error) {
