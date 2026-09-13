@@ -1,9 +1,10 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { ArrowRight, Bell, Check, Trash2 } from 'lucide-react'
 import clsx from 'clsx'
 import { Link } from 'react-router-dom'
 import { Button } from '../../shared/components'
 import { notificationSourceLabels, notificationVisuals } from '../../shared/notifications/presentation'
+import { NotificationMessage } from '../../shared/notifications/NotificationMessage'
 import { useNotificationStore, type Notification } from '../../store/notificationStore'
 
 type NotificationFilter = 'all' | 'unread' | 'error' | 'warning'
@@ -24,6 +25,10 @@ function matchesFilter(notification: Notification, filter: NotificationFilter) {
 export function NotificationsPage() {
   const { notifications, markAsRead, markAllAsRead, clearNotifications } = useNotificationStore()
   const [filter, setFilter] = useState<NotificationFilter>('all')
+  useEffect(() => {
+    markAllAsRead()
+  }, [markAllAsRead])
+
   const unreadCount = notifications.filter((notification) => !notification.read).length
   const filterCounts = useMemo(() => ({
     all: notifications.length,
@@ -103,16 +108,20 @@ export function NotificationsPage() {
         </div>
       </section>
 
-      <section id="notifications-list" aria-live="polite" className="overflow-hidden rounded-2xl border border-[var(--color-border-default)] bg-[var(--color-bg-surface)] shadow-[var(--shadow-xs)]">
+      <section
+        id="notifications-list"
+        aria-live="polite"
+        className="rounded-2xl border border-[var(--color-border-default)] bg-[var(--color-bg-muted)] p-2 shadow-[var(--shadow-xs)]"
+      >
         {filteredNotifications.length === 0 ? (
-          <div className="flex flex-col items-center justify-center px-6 py-12 text-center text-[var(--color-text-muted)]">
+          <div className="flex flex-col items-center justify-center rounded-xl border border-[var(--color-border-default)] bg-[var(--color-bg-surface)] px-6 py-12 text-center text-[var(--color-text-muted)] shadow-[var(--shadow-xs)]">
             <div className="mb-3 flex h-11 w-11 items-center justify-center rounded-2xl bg-[var(--color-bg-muted)]">
               <Bell className="h-5 w-5 opacity-60" />
             </div>
             <p className="text-sm">{notifications.length === 0 ? '暂无通知' : '当前筛选没有通知'}</p>
           </div>
         ) : (
-          <div>
+          <div className="space-y-1.5">
             {filteredNotifications.map((notification) => {
               const visual = notificationVisuals[notification.type]
               const Icon = visual.icon
@@ -124,10 +133,7 @@ export function NotificationsPage() {
                 <article
                   key={notification.id}
                   className={clsx(
-                    'relative grid grid-cols-[2.25rem_minmax(0,1fr)] gap-3 border-b border-[var(--color-border-muted)] px-4 py-3.5 last:border-0 sm:grid-cols-[2.25rem_minmax(0,1fr)_auto]',
-                    notification.read
-                      ? 'bg-[var(--color-bg-surface)] hover:bg-[var(--color-bg-muted)]'
-                      : 'bg-[var(--color-bg-subtle)] hover:bg-[var(--color-bg-muted)]',
+                    'relative grid grid-cols-[2.25rem_minmax(0,1fr)] gap-3 overflow-hidden rounded-xl border border-[var(--color-border-default)] bg-[var(--color-bg-surface)] px-4 py-3 shadow-[var(--shadow-xs)] transition-colors duration-200 hover:bg-[var(--color-bg-elevated)] sm:grid-cols-[2.25rem_minmax(0,1fr)_auto]',
                   )}
                 >
                   <span aria-hidden="true" className={clsx('absolute inset-y-0 left-0 w-0.5', visual.rail, notification.read && 'opacity-30')} />
@@ -149,9 +155,11 @@ export function NotificationsPage() {
                       <span aria-hidden="true" className="text-[var(--color-border-strong)]">·</span>
                       <time dateTime={notification.createdAt}>{notification.time}</time>
                     </div>
-                    <p className="mt-2 max-w-4xl whitespace-pre-wrap break-words text-[13px] leading-5 text-[var(--color-text-secondary)]">
-                      {notification.message}
-                    </p>
+                    <NotificationMessage
+                      message={notification.message}
+                      context={notification.message.includes('备份') || notification.message.includes('OpenList') || notification.message.includes('S3') ? 'backup' : 'generic'}
+                      className='mt-2 max-w-4xl text-[var(--color-text-secondary)]'
+                    />
                     {notification.action?.type === 'navigate' && (
                       <Link
                         to={notification.action.path}

@@ -11,6 +11,7 @@ import {
   type NotificationType,
 } from '../../store/notificationProtocol'
 import { notificationVisuals } from '../notifications/presentation'
+import { NotificationMessage } from '../notifications/NotificationMessage'
 
 interface Toast extends NotificationPayload {
   id: string
@@ -169,7 +170,7 @@ function ToastItem({ toast: t, onManualDismiss }: { toast: Toast; onManualDismis
       </span>
       <div className="min-w-0 flex-1">
         <p className={`text-sm leading-5 ${titleClass}`}>{t.title}</p>
-        <p className="mt-0.5 break-words text-sm leading-5 text-[var(--color-text-secondary)]">{t.message}</p>
+        <NotificationMessage message={t.message} className='mt-0.5 text-[var(--color-text-secondary)]' compact />
         {t.action?.type === 'navigate' && (
           <Link
             to={t.action.path}

@@ -3,6 +3,7 @@ import { useLocation, useNavigate } from 'react-router-dom'
 import { Clock3, Settings2, Upload } from 'lucide-react'
 
 import { Button, Progress, toast } from '../../shared/components'
+import { NotificationMessage } from '../../shared/notifications/NotificationMessage'
 import { BackupImportModal } from './components/BackupImportModal'
 import { ScheduledBackupModal } from './components/ScheduledBackupModal'
 import { BackupChannelConfigModal } from './components/BackupChannelConfigModal'
@@ -391,10 +392,10 @@ export function BackupPage() {
   return (
     <div className="w-full space-y-4 animate-fade-in">
       {exportProgress && (
-        <div className="space-y-2 rounded-xl border border-[var(--color-border-default)] bg-[var(--color-bg-surface)] px-4 py-3" role="status" aria-live="polite">
-          <div className="flex items-center justify-between gap-3 text-xs">
-            <span className="min-w-0 break-words text-[var(--color-text-secondary)]">{exportProgress.message}</span>
-            <span className={exportProgress.phase === 'error' ? 'text-[var(--color-error)]' : exportProgress.phase === 'done' ? 'text-[var(--color-success)]' : 'text-[var(--color-text-muted)]'}>
+        <div className="space-y-3 rounded-xl border border-[var(--color-border-default)] bg-[var(--color-bg-surface)] px-4 py-3 shadow-[var(--shadow-xs)]" role="status" aria-live="polite">
+          <div className="flex items-start justify-between gap-3">
+            <NotificationMessage message={exportProgress.message} context='backup' className="min-w-0 flex-1 text-[var(--color-text-secondary)]" />
+            <span className={exportProgress.phase === 'error' ? 'shrink-0 text-xs font-medium text-[var(--color-error)]' : exportProgress.phase === 'done' ? 'shrink-0 text-xs font-medium text-[var(--color-success)]' : 'shrink-0 text-xs font-medium text-[var(--color-text-muted)]'}>
               {exportProgress.phase === 'error' ? '失败' : exportProgress.phase === 'done' ? '完成' : `${exportProgress.progress}%`}
             </span>
           </div>
@@ -413,15 +414,26 @@ export function BackupPage() {
             </div>
           )}
           {exportLogs.length > 0 && (
-            <div ref={exportLogsRef} className="max-h-28 overflow-y-auto border-t border-[var(--color-border-muted)] pt-2 font-mono text-xs leading-5 text-[var(--color-text-muted)]">
-              {exportLogs.map(item => (
-                <div key={item.id}>
-                  <span className="mr-2">{item.time}</span>
-                  <span className={item.phase === 'error' ? 'text-[var(--color-error)]' : item.phase === 'done' ? 'text-[var(--color-success)]' : 'text-[var(--color-text-secondary)]'}>
-                    {item.text}
-                  </span>
-                </div>
-              ))}
+            <div className="rounded-lg border border-[var(--color-border-muted)] bg-[var(--color-bg-muted)] px-3 py-2">
+              <div className="mb-1.5 flex items-center justify-between gap-2 text-[11px]">
+                <span className="font-medium text-[var(--color-text-secondary)]">过程记录</span>
+                <span className="text-[var(--color-text-muted)]">{exportLogs.length} 条</span>
+              </div>
+              <div ref={exportLogsRef} className="max-h-36 space-y-1 overflow-y-auto pr-1">
+                {exportLogs.map(item => (
+                  <div key={item.id} className="min-w-0 rounded-md bg-[var(--color-bg-surface)] px-2 py-1">
+                    <div className="flex min-w-0 items-start gap-2">
+                      <span className="shrink-0 pt-0.5 font-mono text-[10px] leading-5 text-[var(--color-text-muted)]">{item.time}</span>
+                      <NotificationMessage
+                        message={item.text}
+                        context='backup'
+                        compact
+                        className={item.phase === 'error' ? 'min-w-0 flex-1 text-[var(--color-error)]' : item.phase === 'done' ? 'min-w-0 flex-1 text-[var(--color-success)]' : 'min-w-0 flex-1 text-[var(--color-text-secondary)]'}
+                      />
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
         </div>

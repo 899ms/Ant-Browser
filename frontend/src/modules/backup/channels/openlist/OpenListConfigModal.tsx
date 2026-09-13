@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { CheckCircle2, Eye, EyeOff, Settings2, XCircle } from 'lucide-react'
 
 import { Button, FormItem, Input, Modal, toast } from '../../../../shared/components'
+import { NotificationMessage } from '../../../../shared/notifications/NotificationMessage'
 import {
   defaultOpenListSettings,
   fetchOpenListSettings,
@@ -318,7 +319,7 @@ export function OpenListConfigModal({ open, onClose, onConfigured, onBusyChange 
             {testResult.status === 'error'
               ? <XCircle className="mt-0.5 h-4 w-4 shrink-0" />
               : <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />}
-            <span className="min-w-0 break-words">{testResult.message}</span>
+            <NotificationMessage message={testResult.message} context='backup' className="min-w-0 flex-1" compact />
           </div>
         )}
         {error && <p role="alert" className="text-sm text-[var(--color-error)]">{error}</p>}

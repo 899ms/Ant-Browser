@@ -3,6 +3,7 @@ import { ArrowLeft, CheckCircle2, Database, Eye, EyeOff, Plug, Save, XCircle } f
 import { useLocation, useNavigate } from 'react-router-dom'
 
 import { Button, Card, FormItem, Input, Switch, toast } from '../../../../shared/components'
+import { NotificationMessage } from '../../../../shared/notifications/NotificationMessage'
 import {
   defaultS3Settings,
   fetchS3Settings,
@@ -365,7 +366,7 @@ export function S3ConfigPage() {
               {testResult.status === 'error'
                 ? <XCircle className="mt-0.5 h-4 w-4 shrink-0" />
                 : <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />}
-              <span className="min-w-0 break-words">{testResult.message}</span>
+              <NotificationMessage message={testResult.message} context='backup' className="min-w-0 flex-1" compact />
             </div>
           )}
           {error && <p role="alert" className="text-sm text-[var(--color-error)]">{error}</p>}
