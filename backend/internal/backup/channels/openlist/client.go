@@ -4,6 +4,7 @@ import (
 	"ant-chrome/backend/internal/backup/channels"
 	"bytes"
 	"context"
+	"encoding/json"
 	"encoding/xml"
 	"errors"
 	"fmt"
@@ -165,13 +166,23 @@ func (c *Client) Upload(ctx context.Context, localPath, fileName string) (File, 
 	if err != nil {
 		return File{}, err
 	}
-	return c.uploadFile(ctx, localPath, cleanName, `backup`, nil)
+	outcome, err := c.uploadFile(ctx, localPath, cleanName, `backup`, nil)
+	return outcome.File, err
 }
 
 func (c *Client) UploadWithProgress(ctx context.Context, localPath, fileName string, progress channels.UploadProgressFunc) (File, error) {
 	cleanName, err := cleanFileName(fileName)
 	if err != nil {
 		return File{}, err
+	}
+	outcome, err := c.uploadFile(ctx, localPath, cleanName, `backup`, progress)
+	return outcome.File, err
+}
+
+func (c *Client) UploadWithProgressOutcome(ctx context.Context, localPath, fileName string, progress channels.UploadProgressFunc) (channels.UploadOutcome, error) {
+	cleanName, err := cleanFileName(fileName)
+	if err != nil {
+		return channels.UploadOutcome{}, err
 	}
 	return c.uploadFile(ctx, localPath, cleanName, `backup`, progress)
 }
@@ -181,7 +192,8 @@ func (c *Client) UploadMetadata(ctx context.Context, localPath, fileName string)
 	if err != nil {
 		return File{}, err
 	}
-	return c.uploadFile(ctx, localPath, cleanName, `backup metadata`, nil)
+	outcome, err := c.uploadFile(ctx, localPath, cleanName, `backup metadata`, nil)
+	return outcome.File, err
 }
 
 func (c *Client) UploadMetadataWithProgress(ctx context.Context, localPath, fileName string, progress channels.UploadProgressFunc) (File, error) {
@@ -189,46 +201,57 @@ func (c *Client) UploadMetadataWithProgress(ctx context.Context, localPath, file
 	if err != nil {
 		return File{}, err
 	}
-	return c.uploadFile(ctx, localPath, cleanName, `backup metadata`, progress)
+	outcome, err := c.uploadFile(ctx, localPath, cleanName, `backup metadata`, progress)
+	return outcome.File, err
 }
 
-func (c *Client) uploadFile(ctx context.Context, localPath, cleanName, artifactName string, progress channels.UploadProgressFunc) (File, error) {
+func (c *Client) uploadFile(ctx context.Context, localPath, cleanName, artifactName string, progress channels.UploadProgressFunc) (channels.UploadOutcome, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	info, err := os.Stat(localPath)
 	if err != nil {
-		return File{}, fmt.Errorf(`stat local %s failed: %w`, artifactName, err)
+		return channels.UploadOutcome{}, fmt.Errorf(`stat local %s failed: %w`, artifactName, err)
 	}
 	if info.IsDir() {
-		return File{}, fmt.Errorf(`local %s path is a directory`, artifactName)
+		return channels.UploadOutcome{}, fmt.Errorf(`local %s path is a directory`, artifactName)
 	}
 	controlCtx, controlCancel := c.controlContext(ctx)
 	err = c.validateRemoteDirectory(controlCtx)
 	controlCancel()
 	if err != nil {
-		return File{}, err
+		return channels.UploadOutcome{}, err
 	}
 	file, err := os.Open(localPath)
 	if err != nil {
-		return File{}, fmt.Errorf(`open local backup failed: %w`, err)
+		return channels.UploadOutcome{}, fmt.Errorf(`open local backup failed: %w`, err)
 	}
 	defer file.Close()
 
 	if err := c.put(ctx, cleanName, file, info.Size(), progress); err != nil {
-		if isTimeoutError(err) {
+		committed := isCommittedUploadError(err)
+		if isTimeoutError(err) || committed {
 			reportUploadVerification(progress, info.Size())
 			verifyCtx, verifyCancel := c.cleanupContext(ctx)
 			remoteFile, verifyErr := c.stat(verifyCtx, cleanName)
 			verifyCancel()
 			if verifyErr == nil && remoteFile.Size == info.Size() {
-				return remoteFile, nil
+				return channels.UploadOutcome{
+					File:    remoteFile,
+					Warning: uploadWarning(err, committed),
+				}, nil
+			}
+			if committed {
+				if verifyErr != nil {
+					return channels.UploadOutcome{}, fmt.Errorf(`upload %s failed after OpenList reported the file was written: %w (remote verification failed: %v; remote file was left in place)`, artifactName, err, verifyErr)
+				}
+				return channels.UploadOutcome{}, fmt.Errorf(`upload %s failed after OpenList reported the file was written: %w (remote size mismatch: local=%d remote=%d; remote file was left in place)`, artifactName, err, info.Size(), remoteFile.Size)
 			}
 		}
 		cleanupCtx, cleanupCancel := c.cleanupContext(ctx)
 		_ = c.delete(cleanupCtx, cleanName)
 		cleanupCancel()
-		return File{}, fmt.Errorf(`upload %s failed: %w`, artifactName, err)
+		return channels.UploadOutcome{}, fmt.Errorf(`upload %s failed: %w`, artifactName, err)
 	}
 	reportUploadVerification(progress, info.Size())
 	controlCtx, controlCancel = c.controlContext(ctx)
@@ -239,20 +262,20 @@ func (c *Client) uploadFile(ctx context.Context, localPath, cleanName, artifactN
 		verifiedFile, verifyErr := c.stat(verifyCtx, cleanName)
 		verifyCancel()
 		if verifyErr == nil && verifiedFile.Size == info.Size() {
-			return verifiedFile, nil
+			return channels.UploadOutcome{File: verifiedFile}, nil
 		}
 		cleanupCtx, cleanupCancel := c.cleanupContext(ctx)
 		_ = c.delete(cleanupCtx, cleanName)
 		cleanupCancel()
-		return File{}, fmt.Errorf(`verify remote %s failed: %w`, artifactName, err)
+		return channels.UploadOutcome{}, fmt.Errorf(`verify remote %s failed: %w`, artifactName, err)
 	}
 	if remoteFile.Size != info.Size() {
 		cleanupCtx, cleanupCancel := c.cleanupContext(ctx)
 		_ = c.delete(cleanupCtx, cleanName)
 		cleanupCancel()
-		return File{}, fmt.Errorf(`remote %s size mismatch: local=%d remote=%d`, artifactName, info.Size(), remoteFile.Size)
+		return channels.UploadOutcome{}, fmt.Errorf(`remote %s size mismatch: local=%d remote=%d`, artifactName, info.Size(), remoteFile.Size)
 	}
-	return remoteFile, nil
+	return channels.UploadOutcome{File: remoteFile}, nil
 }
 
 func reportUploadVerification(progress channels.UploadProgressFunc, totalBytes int64) {
@@ -275,6 +298,22 @@ func isTimeoutError(err error) bool {
 	}
 	var networkError net.Error
 	return errors.As(err, &networkError) && networkError.Timeout()
+}
+
+func isCommittedUploadError(err error) bool {
+	var responseErr *remoteHTTPError
+	return errors.As(err, &responseErr) && responseErr.uploadCommitted
+}
+
+func uploadWarning(err error, committed bool) string {
+	if !committed {
+		return ``
+	}
+	var responseErr *remoteHTTPError
+	if errors.As(err, &responseErr) && strings.TrimSpace(responseErr.committedMessage) != `` {
+		return fmt.Sprintf(`%s；远端文件大小已校验`, strings.TrimSpace(responseErr.committedMessage))
+	}
+	return `OpenList 已报告文件写入虚拟盘，但目标同步失败；远端文件大小已校验`
 }
 
 func (c *Client) Download(ctx context.Context, fileName, localPath string) error {
@@ -851,8 +890,10 @@ func hrefBaseName(value string) string {
 }
 
 type remoteHTTPError struct {
-	statusCode int
-	message    string
+	statusCode       int
+	message          string
+	uploadCommitted  bool
+	committedMessage string
 }
 
 func (e *remoteHTTPError) Error() string {
@@ -867,6 +908,7 @@ func isRemoteHTTPStatus(err error, statusCode int) bool {
 func responseError(response *http.Response) error {
 	body, _ := io.ReadAll(io.LimitReader(response.Body, 4096))
 	message := strings.TrimSpace(string(body))
+	uploadCommitted, committedMessage := committedUploadResponse(response.StatusCode, body)
 	if response.StatusCode == http.StatusRequestEntityTooLarge {
 		return fmt.Errorf(`remote request failed: HTTP 413 Request Entity Too Large：远端反向代理拒绝了过大的请求体（通常是 OpenResty/Nginx 的 client_max_body_size），请将其调大到超过备份文件大小；客户端限速和超时无法绕过此限制`)
 	}
@@ -879,9 +921,35 @@ func responseError(response *http.Response) error {
 		message = http.StatusText(response.StatusCode)
 	}
 	return &remoteHTTPError{
-		statusCode: response.StatusCode,
-		message:    fmt.Sprintf(`remote request failed: HTTP %d: %s`, response.StatusCode, message),
+		statusCode:       response.StatusCode,
+		message:          fmt.Sprintf(`remote request failed: HTTP %d: %s`, response.StatusCode, message),
+		uploadCommitted:  uploadCommitted,
+		committedMessage: committedMessage,
 	}
+}
+
+func committedUploadResponse(statusCode int, body []byte) (bool, string) {
+	if statusCode < http.StatusBadRequest {
+		return false, ``
+	}
+	var payload struct {
+		Message    string            `json:"message"`
+		RemotePath string            `json:"remotePath"`
+		Targets    []json.RawMessage `json:"targets"`
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(body), &payload); err != nil {
+		return false, ``
+	}
+	if strings.TrimSpace(payload.RemotePath) == `` || len(payload.Targets) == 0 {
+		return false, ``
+	}
+	message := strings.ToLower(strings.TrimSpace(payload.Message))
+	written := strings.Contains(message, `写入`) || strings.Contains(message, `written`) || strings.Contains(message, `uploaded`)
+	synchronized := strings.Contains(message, `同步`) || strings.Contains(message, `sync`)
+	if !written || !synchronized {
+		return false, ``
+	}
+	return true, strings.TrimSpace(payload.Message)
 }
 
 func isRedirectStatus(statusCode int) bool {

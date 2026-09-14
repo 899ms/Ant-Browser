@@ -36,11 +36,15 @@ const (
 func (a *App) backupRemoteHistoryEntries(client backupRemoteMetadataDownloader, items []channels.File, timeout time.Duration) []map[string]interface{} {
 	result := make([]map[string]interface{}, 0, len(items))
 	for _, item := range items {
-		result = append(result, map[string]interface{}{
+		entry := map[string]interface{}{
 			`name`:       item.Name,
 			`size`:       item.Size,
 			`modifiedAt`: item.ModifiedAt,
-		})
+		}
+		for key, value := range backupPackageInfoFields(backupPackageInfoFromFileName(item.Name)) {
+			entry[key] = value
+		}
+		result = append(result, entry)
 	}
 	if client == nil || len(items) == 0 {
 		return result
@@ -167,7 +171,7 @@ func (a *App) backupOpenListUploadLocked(input map[string]string) (map[string]in
 	if err != nil {
 		return nil, err
 	}
-	remoteFile, err := a.backupUploadRemoteArtifacts(backupRemoteUploadTarget{
+	outcome, err := a.backupUploadRemoteArtifacts(backupRemoteUploadTarget{
 		label:               `OpenList`,
 		client:              client,
 		timeout:             openlist.TransferTimeout,
@@ -177,8 +181,11 @@ func (a *App) backupOpenListUploadLocked(input map[string]string) (map[string]in
 		a.backupEmitExportProgress(`error`, 100, err.Error())
 		return nil, err
 	}
-	result[`remoteName`] = remoteFile.Name
-	result[`remoteSize`] = remoteFile.Size
+	result[`remoteName`] = outcome.File.Name
+	result[`remoteSize`] = outcome.File.Size
+	if outcome.Warning != `` {
+		result[`remoteWarning`] = outcome.Warning
+	}
 	a.backupEmitExportProgress(`done`, 100, `backup uploaded to OpenList`)
 	result[`message`] = `backup uploaded to OpenList`
 	return result, nil
@@ -385,20 +392,23 @@ func normalizeDownloadedBackupMetadata(metadataPath, backupFileName string) erro
 	return writeBackupMetadataFile(metadataPath, append(updated, '\n'))
 }
 
-func (a *App) backupUploadRemoteArtifacts(target backupRemoteUploadTarget, localPath, fileName string) (channels.File, error) {
+func (a *App) backupUploadRemoteArtifacts(target backupRemoteUploadTarget, localPath, fileName string) (channels.UploadOutcome, error) {
 	uploadMessage, uploadSize, err := backupRemoteUploadProgressMessage(localPath, `备份文件`, target.label, target.uploadRateLimitMBps)
 	if err != nil {
-		return channels.File{}, err
+		return channels.UploadOutcome{}, err
 	}
 	a.backupEmitExportProgressTransfer(`uploading`, 96, uploadMessage, channels.UploadProgress{TotalBytes: uploadSize})
 	ctx, cancel := a.backupRemoteContext(target.timeout)
-	remoteFile, err := backupUploadWithProgress(ctx, target.client, localPath, fileName, a.backupRemoteUploadProgressCallback(target.label, `备份文件`, 96, 98))
+	outcome, err := backupUploadWithProgress(ctx, target.client, localPath, fileName, a.backupRemoteUploadProgressCallback(target.label, `备份文件`, 96, 98))
 	cancel()
 	if err != nil {
-		return channels.File{}, fmt.Errorf(`上传%s备份文件失败: %w`, target.label, err)
+		return channels.UploadOutcome{}, fmt.Errorf(`上传%s备份文件失败: %w`, target.label, err)
+	}
+	if strings.TrimSpace(outcome.Warning) != `` {
+		a.backupEmitExportProgress(`warning`, 99, fmt.Sprintf(`%s备份文件已写入，但远程目标同步存在警告：%s`, target.label, strings.TrimSpace(outcome.Warning)))
 	}
 	if target.skipMetadata {
-		return remoteFile, nil
+		return outcome, nil
 	}
 
 	metadataPath := backupMetadataPath(localPath)
@@ -406,20 +416,20 @@ func (a *App) backupUploadRemoteArtifacts(target backupRemoteUploadTarget, local
 	if _, err := os.Stat(metadataPath); err != nil {
 		if os.IsNotExist(err) {
 			a.backupEmitExportProgress(`warning`, 99, fmt.Sprintf(`%s backup metadata is missing; skipped metadata upload`, target.label))
-			return remoteFile, nil
+			return outcome, nil
 		}
-		return channels.File{}, fmt.Errorf(`read %s backup metadata failed: %w`, target.label, err)
+		return channels.UploadOutcome{}, fmt.Errorf(`read %s backup metadata failed: %w`, target.label, err)
 	}
 	metadataUploadPath, cleanupMetadata, metadataPrepareErr := backupPrepareRemoteMetadata(metadataPath, filepath.Base(localPath), fileName)
 	if metadataPrepareErr != nil {
 		a.backupEmitExportProgress(`warning`, 99, fmt.Sprintf(`%s backup metadata is unavailable; skipped metadata upload: %v`, target.label, metadataPrepareErr))
-		return remoteFile, nil
+		return outcome, nil
 	}
 	defer cleanupMetadata()
 	metadataMessage, metadataSize, err := backupRemoteUploadProgressMessage(metadataUploadPath, `备份元数据`, target.label, target.uploadRateLimitMBps)
 	if err != nil {
 		a.backupEmitExportProgress(`warning`, 99, fmt.Sprintf(`%s backup metadata is unavailable; skipped metadata upload: %v`, target.label, err))
-		return remoteFile, nil
+		return outcome, nil
 	}
 	a.backupEmitExportProgressTransfer(`uploading`, 98, metadataMessage, channels.UploadProgress{TotalBytes: metadataSize})
 	metadataContext, metadataCancel := a.backupRemoteContext(backupRemoteControlTimeout(target.timeout))
@@ -427,9 +437,9 @@ func (a *App) backupUploadRemoteArtifacts(target backupRemoteUploadTarget, local
 	metadataCancel()
 	if metadataErr != nil {
 		a.backupEmitExportProgress(`warning`, 99, fmt.Sprintf(`%s backup metadata upload failed; ZIP kept: %v`, target.label, metadataErr))
-		return remoteFile, nil
+		return outcome, nil
 	}
-	return remoteFile, nil
+	return outcome, nil
 }
 
 func (a *App) backupRestoreRemoteLocked(client channels.Client, label string, timeout time.Duration, fileName, temporaryPrefix string) (map[string]interface{}, error) {
@@ -571,11 +581,16 @@ func (a *App) backupOpenListUploadProgressCallback(artifactName string, startPro
 	return a.backupRemoteUploadProgressCallback(`OpenList`, artifactName, startProgress, endProgress)
 }
 
-func backupUploadWithProgress(ctx context.Context, client channels.Client, localPath, fileName string, progress channels.UploadProgressFunc) (channels.File, error) {
-	if progressClient, ok := client.(channels.ProgressClient); ok {
-		return progressClient.UploadWithProgress(ctx, localPath, fileName, progress)
+func backupUploadWithProgress(ctx context.Context, client channels.Client, localPath, fileName string, progress channels.UploadProgressFunc) (channels.UploadOutcome, error) {
+	if outcomeClient, ok := client.(channels.UploadOutcomeClient); ok {
+		return outcomeClient.UploadWithProgressOutcome(ctx, localPath, fileName, progress)
 	}
-	return client.Upload(ctx, localPath, fileName)
+	if progressClient, ok := client.(channels.ProgressClient); ok {
+		file, err := progressClient.UploadWithProgress(ctx, localPath, fileName, progress)
+		return channels.UploadOutcome{File: file}, err
+	}
+	file, err := client.Upload(ctx, localPath, fileName)
+	return channels.UploadOutcome{File: file}, err
 }
 
 func backupUploadMetadataWithProgress(ctx context.Context, client channels.Client, localPath, fileName string, progress channels.UploadProgressFunc) (channels.File, error) {

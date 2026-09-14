@@ -300,6 +300,72 @@ func TestClientUploadSupportsVirtualDiskWithoutMove(t *testing.T) {
 	}
 }
 
+func TestClientTreatsWrittenVirtualDisk502AsCompletedWithWarning(t *testing.T) {
+	store := newMemoryWebDAV()
+	store.dirs[`backups`] = true
+	store.putResponseStatus = http.StatusBadGateway
+	store.putResponseBody = `{"conflictMode":"overwrite","message":"虚拟盘文件已写入，但部分目标同步失败","remotePath":"ant-chrome-virtual-disk-502.zip","status":"failed","targets":[{"destinationId":"openlist","destinationName":"OpenList","status":"failed","message":"上传超时","durationMs":31326}]}`
+	server := store.server()
+	defer server.Close()
+	client, err := NewClient(Config{
+		BaseURL:    server.URL + `/dav`,
+		RemotePath: `backups`,
+		Token:      `secret`,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	localPath := t.TempDir() + `/source.zip`
+	content := []byte(`virtual-disk-502-backup`)
+	if err := os.WriteFile(localPath, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	outcome, err := client.UploadWithProgressOutcome(context.Background(), localPath, `ant-chrome-virtual-disk-502.zip`, nil)
+	if err != nil {
+		t.Fatalf(`upload failed: %v`, err)
+	}
+	if outcome.File.Size != int64(len(content)) {
+		t.Fatalf(`remote file size = %d, want %d`, outcome.File.Size, len(content))
+	}
+	if !strings.Contains(outcome.Warning, `虚拟盘文件已写入`) || !strings.Contains(outcome.Warning, `远端文件大小已校验`) {
+		t.Fatalf(`upload warning = %q, want committed-write warning`, outcome.Warning)
+	}
+	if !store.hasFile(`backups/ant-chrome-virtual-disk-502.zip`) {
+		t.Fatal(`committed virtual-disk file was deleted after HTTP 502`)
+	}
+}
+
+func TestClientLeavesCommittedFileOnRemoteSizeMismatch(t *testing.T) {
+	store := newMemoryWebDAV()
+	store.dirs[`backups`] = true
+	store.putResponseStatus = http.StatusBadGateway
+	store.putStoredData = []byte(`partial-content`)
+	store.putResponseBody = strings.ReplaceAll(`{'message':'虚拟盘文件已写入，但部分目标同步失败','remotePath':'ant-chrome-size-mismatch.zip','targets':[{'status':'failed'}]}`, `'`, string(rune(34)))
+	server := store.server()
+	defer server.Close()
+	client, err := NewClient(Config{
+		BaseURL:    server.URL + `/dav`,
+		RemotePath: `backups`,
+		Token:      `secret`,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	localPath := t.TempDir() + `/source.zip`
+	if err := os.WriteFile(localPath, []byte(`complete-content`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = client.UploadWithProgressOutcome(context.Background(), localPath, `ant-chrome-size-mismatch.zip`, nil)
+	if err == nil || !strings.Contains(err.Error(), `remote size mismatch`) || !strings.Contains(err.Error(), `remote file was left in place`) {
+		t.Fatalf(`upload error = %v, want committed size mismatch without deletion`, err)
+	}
+	if !store.hasFile(`backups/ant-chrome-size-mismatch.zip`) {
+		t.Fatal(`committed virtual-disk file was deleted after size mismatch`)
+	}
+}
+
 func TestClientTreatsTimedOutPutAsCompletedWhenRemoteFileExists(t *testing.T) {
 	store := newMemoryWebDAV()
 	store.dirs[`backups`] = true

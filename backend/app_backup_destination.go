@@ -125,23 +125,31 @@ func (a *App) BackupCreatePackage(input map[string]string) (map[string]interface
 		})
 	}
 	remoteErrors := make([]string, 0, len(remoteTargets))
+	remoteWarnings := make([]string, 0, len(remoteTargets))
 	remoteNames := make([]string, 0, len(remoteTargets))
 	remoteFileName := filepath.Base(packagePath)
 	if len(profileIDs) > 0 {
 		remoteFileName = backupProfilePackageFileName(profileNames, time.Now(), true)
 	}
 	for _, target := range remoteTargets {
-		remoteFile, uploadErr := a.backupUploadRemoteArtifacts(target, packagePath, remoteFileName)
+		outcome, uploadErr := a.backupUploadRemoteArtifacts(target, packagePath, remoteFileName)
 		if uploadErr != nil {
 			remoteErrors = append(remoteErrors, fmt.Sprintf("%s: %v", target.label, uploadErr))
 			continue
 		}
+		remoteFile := outcome.File
 		result["remoteUploaded"] = true
+		if strings.TrimSpace(outcome.Warning) != "" {
+			remoteWarnings = append(remoteWarnings, fmt.Sprintf("%s: %s", target.label, strings.TrimSpace(outcome.Warning)))
+		}
 		remoteNames = append(remoteNames, fmt.Sprintf("%s:%s", target.label, remoteFile.Name))
 		if _, exists := result["remoteName"]; !exists {
 			result["remoteName"] = remoteFile.Name
 			result["remoteSize"] = remoteFile.Size
 		}
+	}
+	if len(remoteWarnings) > 0 {
+		result["remoteWarning"] = strings.Join(remoteWarnings, "; ")
 	}
 	if len(remoteErrors) > 0 {
 		result["partial"] = true

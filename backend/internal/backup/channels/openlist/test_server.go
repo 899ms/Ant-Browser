@@ -24,6 +24,9 @@ type memoryWebDAV struct {
 	allowOptions                 bool
 	hangFileStat                 bool
 	hangPutResponse              bool
+	putResponseStatus            int
+	putResponseBody              string
+	putStoredData                []byte
 }
 
 func newMemoryWebDAV() *memoryWebDAV {
@@ -66,7 +69,15 @@ func (store *memoryWebDAV) handle(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
+		if store.putStoredData != nil {
+			data = append([]byte(nil), store.putStoredData...)
+		}
 		store.files[resource] = data
+		if store.putResponseStatus != 0 {
+			w.WriteHeader(store.putResponseStatus)
+			_, _ = w.Write([]byte(store.putResponseBody))
+			return
+		}
 		if store.hangPutResponse {
 			<-r.Context().Done()
 			return

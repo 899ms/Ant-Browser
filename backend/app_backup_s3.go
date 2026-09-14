@@ -74,7 +74,7 @@ func (a *App) backupS3UploadLocked(input map[string]string) (map[string]interfac
 	if err != nil {
 		return nil, err
 	}
-	remoteFile, err := a.backupUploadRemoteArtifacts(backupRemoteUploadTarget{
+	outcome, err := a.backupUploadRemoteArtifacts(backupRemoteUploadTarget{
 		label:   "S3",
 		client:  client,
 		timeout: s3.TransferTimeout,
@@ -83,9 +83,12 @@ func (a *App) backupS3UploadLocked(input map[string]string) (map[string]interfac
 		a.backupEmitExportProgress("error", 100, err.Error())
 		return nil, err
 	}
-	result["remoteName"] = remoteFile.Name
-	result["remoteSize"] = remoteFile.Size
+	result["remoteName"] = outcome.File.Name
+	result["remoteSize"] = outcome.File.Size
 	result["remoteUploaded"] = true
+	if outcome.Warning != "" {
+		result["remoteWarning"] = outcome.Warning
+	}
 	result["message"] = "S3 \u5907\u4efd\u5b8c\u6210"
 	a.backupEmitExportProgress("done", 100, result["message"].(string))
 	return result, nil

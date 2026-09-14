@@ -20,6 +20,11 @@ type File struct {
 	Directory  bool
 }
 
+type UploadOutcome struct {
+	File    File
+	Warning string
+}
+
 type UploadProgress struct {
 	BytesTransferred int64
 	TotalBytes       int64
@@ -43,4 +48,8 @@ type ProgressClient interface {
 	Client
 	UploadWithProgress(context.Context, string, string, UploadProgressFunc) (File, error)
 	UploadMetadataWithProgress(context.Context, string, string, UploadProgressFunc) (File, error)
+}
+
+type UploadOutcomeClient interface {
+	UploadWithProgressOutcome(context.Context, string, string, UploadProgressFunc) (UploadOutcome, error)
 }

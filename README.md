@@ -339,6 +339,7 @@ chrome/
 5. 需要自动备份时，先配置 OpenList，再设置每日执行时间。
 
 OpenList Token 和 S3 访问凭据保存在应用用户配置目录中的 `backup.local.yaml`，不会写入 `config.yaml`；不要把该文件复制到公共仓库或提交到 git。
+Windows 升级或卸载旧版本时，安装器会先将旧安装目录中的 `backup.local.yaml` 迁移到该用户配置目录，避免重装丢失凭据。
 
 ## 常用操作
 

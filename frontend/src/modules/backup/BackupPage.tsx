@@ -163,10 +163,13 @@ export function BackupPage() {
         : ''
       const resultMessage = `${res.message || '备份完成'}${profileHint}${fileHint}`
       const partial = Boolean(res.partial || res.remoteError)
+      const remoteWarning = typeof res.remoteWarning === 'string' ? res.remoteWarning.trim() : ''
+      const feedbackMessage = remoteWarning ? `${resultMessage}：${remoteWarning}` : resultMessage
+      const feedbackPhase = partial ? 'error' : remoteWarning ? 'warning' : 'done'
       setExportProgress({
-        phase: partial ? 'error' : 'done',
+        phase: feedbackPhase,
         progress: 100,
-        message: resultMessage,
+        message: feedbackMessage,
       })
       if (localSaved && res.zipPath) {
         setHistoryRefreshToken(previous => previous + 1)
@@ -175,7 +178,9 @@ export function BackupPage() {
         setHistoryRefreshToken(previous => previous + 1)
       }
       if (partial) {
-        toast.warning(resultMessage)
+        toast.warning(feedbackMessage)
+      } else if (remoteWarning) {
+        toast.warning(feedbackMessage)
       } else {
         toast.success(resultMessage)
       }
@@ -395,14 +400,14 @@ export function BackupPage() {
         <div className="space-y-3 rounded-xl border border-[var(--color-border-default)] bg-[var(--color-bg-surface)] px-4 py-3 shadow-[var(--shadow-xs)]" role="status" aria-live="polite">
           <div className="flex items-start justify-between gap-3">
             <NotificationMessage message={exportProgress.message} context='backup' className="min-w-0 flex-1 text-[var(--color-text-secondary)]" />
-            <span className={exportProgress.phase === 'error' ? 'shrink-0 text-xs font-medium text-[var(--color-error)]' : exportProgress.phase === 'done' ? 'shrink-0 text-xs font-medium text-[var(--color-success)]' : 'shrink-0 text-xs font-medium text-[var(--color-text-muted)]'}>
-              {exportProgress.phase === 'error' ? '失败' : exportProgress.phase === 'done' ? '完成' : `${exportProgress.progress}%`}
+            <span className={exportProgress.phase === 'error' ? 'shrink-0 text-xs font-medium text-[var(--color-error)]' : exportProgress.phase === 'warning' ? 'shrink-0 text-xs font-medium text-[var(--color-warning)]' : exportProgress.phase === 'done' ? 'shrink-0 text-xs font-medium text-[var(--color-success)]' : 'shrink-0 text-xs font-medium text-[var(--color-text-muted)]'}>
+              {exportProgress.phase === 'error' ? '失败' : exportProgress.phase === 'warning' ? '警告' : exportProgress.phase === 'done' ? '完成' : `${exportProgress.progress}%`}
             </span>
           </div>
           <Progress
             percent={exportProgress.progress}
             size="sm"
-            status={exportProgress.phase === 'error' ? 'error' : exportProgress.phase === 'done' ? 'success' : 'normal'}
+            status={exportProgress.phase === 'error' ? 'error' : exportProgress.phase === 'warning' ? 'warning' : exportProgress.phase === 'done' ? 'success' : 'normal'}
             showInfo={false}
           />
           {exportProgress.phase === 'uploading' && exportProgress.totalBytes && exportProgress.totalBytes > 0 && (
@@ -428,7 +433,7 @@ export function BackupPage() {
                         message={item.text}
                         context='backup'
                         compact
-                        className={item.phase === 'error' ? 'min-w-0 flex-1 text-[var(--color-error)]' : item.phase === 'done' ? 'min-w-0 flex-1 text-[var(--color-success)]' : 'min-w-0 flex-1 text-[var(--color-text-secondary)]'}
+                        className={item.phase === 'error' ? 'min-w-0 flex-1 text-[var(--color-error)]' : item.phase === 'warning' ? 'min-w-0 flex-1 text-[var(--color-warning)]' : item.phase === 'done' ? 'min-w-0 flex-1 text-[var(--color-success)]' : 'min-w-0 flex-1 text-[var(--color-text-secondary)]'}
                       />
                     </div>
                   </div>

@@ -57,7 +57,6 @@ export function Modal({
     <div className="fixed inset-0 z-[9990] flex items-center justify-center">
       <div
         className={`modal-backdrop absolute inset-0 ${closing ? 'animate-modal-backdrop-out' : 'animate-modal-backdrop-in'}`}
-        onClick={closable ? onClose : undefined}
       />
 
       <div

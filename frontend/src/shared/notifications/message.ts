@@ -60,6 +60,9 @@ function getBackupSummary(value: string) {
   const remoteFailure = value.match(/^远程备份失败[:：]\s*([^:：;，,\s]+)/)
   if (remoteFailure?.[1]) return `远程备份失败：${remoteFailure[1]}`
 
+  const committedUploadWarning = value.match(/(OpenList|S3)[^\n]{0,180}?(?:虚拟盘文件已写入|已写入虚拟盘|virtual disk[^\n]{0,40}written)[^\n]{0,180}?(?:同步失败|目标同步|sync failed)/i)
+  if (committedUploadWarning?.[1]) return `${committedUploadWarning[1]} 文件已写入，目标同步有警告`
+
   const channelFailure = value.match(/\b(OpenList|S3)\b[^\n]{0,100}?(?:失败|failed)/i)
   if (channelFailure?.[1]) return `${channelFailure[1]} 备份失败`
 

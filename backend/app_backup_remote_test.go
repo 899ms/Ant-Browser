@@ -93,6 +93,38 @@ func TestBackupRemoteHistoryEntriesReadsMetadata(t *testing.T) {
 	}
 }
 
+func TestBackupRemoteHistoryEntriesFallsBackToFileName(t *testing.T) {
+	app := NewApp(t.TempDir())
+	items := app.backupRemoteHistoryEntries(&backupRemoteMetadataTestClient{}, []channels.File{
+		{
+			Name: `ant-chrome-profile-backup-single--ChatGPT-已登录--20260913-161549.751207500.zip`,
+		},
+		{
+			Name: `ant-chrome-profile-backup-multi-3--20260913-161549.751207500.zip`,
+		},
+		{
+			Name: `ant-chrome-backup-20260913-161549.zip`,
+		},
+	}, time.Second)
+
+	if len(items) != 3 {
+		t.Fatalf(`remote history item count = %d, want 3`, len(items))
+	}
+	if items[0][`packageType`] != `profile` || items[0][`profileCount`] != 1 {
+		t.Fatalf(`single profile fallback = %#v, want profile count 1`, items[0])
+	}
+	profileNames, ok := items[0][`profileNames`].([]string)
+	if !ok || len(profileNames) != 1 || profileNames[0] != `ChatGPT-已登录` {
+		t.Fatalf(`single profile names fallback = %#v, want ChatGPT-已登录`, items[0][`profileNames`])
+	}
+	if items[1][`packageType`] != `profile` || items[1][`profileCount`] != 3 {
+		t.Fatalf(`multi profile fallback = %#v, want profile count 3`, items[1])
+	}
+	if items[2][`packageType`] != `full` {
+		t.Fatalf(`full backup fallback = %#v, want full`, items[2])
+	}
+}
+
 func TestBackupDownloadRemoteMetadataKeepsExistingFileOnDownloadFailure(t *testing.T) {
 	metadataPath := t.TempDir() + string(os.PathSeparator) + `backup.json`
 	original := []byte(`existing metadata`)
