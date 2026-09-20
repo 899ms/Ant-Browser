@@ -27,6 +27,7 @@ Ant Browser 的目标很明确：在一台桌面设备上，帮助用户稳定�
 - [更新日志](CHANGELOG.md)
 - [核心特性](#核心特性)
 - [界面预览](#界面预览)
+- [Star History](#star-history)
 - [快速开始](#快速开始)
 - [常用操作](#常用操作)
 - [常见问题](#常见问题)
@@ -192,6 +193,16 @@ Ant Browser 适合以下场景：
 - 启动实例后访问 IP 检测网站验证代理是否真正生效
 - 检查 IP 地区、ASN、运营商和风险值等信息
 - 用于确认当前实例是否已经走目标代理出口
+
+## Star History
+
+<a href="https://www.star-history.com/?repos=black-ant%2Fant-browser&type=date&legend=top-left">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=black-ant/ant-browser&type=date&theme=dark&legend=top-left" />
+    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=black-ant/ant-browser&type=date&legend=top-left" />
+    <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=black-ant/ant-browser&type=date&legend=top-left" />
+  </picture>
+</a>
 
 ## 快速开始
 
